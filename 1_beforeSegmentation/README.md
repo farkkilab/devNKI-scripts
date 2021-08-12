@@ -10,3 +10,8 @@ Scripts used to get ready the pixel probability maps used for segmentations.
 
 
 - headless\_ilastik\_running.sh: To run ilastik (pixel probabilities maps). This script it is necessary to run it inside Linux, I used the ubuntu-terminal inside windows. As output will generated and image file (.tiff) with the probabilities of belonging to a class for each pixel in the input images.
+
+## Aditional notes
+
+For segmentation it was used CellProfiler, the corresponding workflow is stored in: https://datacloud.helsinki.fi/index.php/s/o7yZPTrYWB6jYNE
+For more descriptions about this check the project-Log.
