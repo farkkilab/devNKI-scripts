@@ -1,14 +1,14 @@
-% Crop TMA ome.tif into the already detected cores
+ls % Crop TMA ome.tif into the already detected cores
 % Quantify with already computed masks.
 % /casado
 
 basePath = 'D:\users\fperez\NKI_TMAs_AF\';
-maskPath = 'Probmaps_cyto_nuc_backg4'; %Input folder name
-maskFileName = '_Probabilities_cytomask2.tiff';
+maskPath = 'Nuc-segment'; %Input folder name
+maskFileName = '_Probabilities_MaskNuc.tiff';
 omePath = 'registration';
 omeSuffix = '.ome.tif';
-outputsubfolder = 'quantification4';
-cropCoordsPath = 'dearray';
+outputsubfolder = 'quantification_nuc';
+cropCoordsPath = 'dearray\cropCoords\';
 cropCoordsFileName = '*_cropCoords.mat';
 
 channelNames = readtable( [basePath filesep 'channel_list.csv'], 'ReadVariableNames', false);
@@ -30,10 +30,10 @@ XYnames = {'X_position','Y_position'};
 % List of samples
 sampleList = dir( [ basePath 'TMA*' ] );
 
-selected = [7, 8, 9, 10];
+selected = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 parfor sample = 1:length(selected)
-%for sample = 3
+%for sample = 2
     samp = selected(sample);
     sampleName = sampleList(samp).name;
     disp(sampleName)
@@ -71,7 +71,15 @@ parfor sample = 1:length(selected)
         % Coordinate .mat files must contain a 'rect' object
         croppingdata = load( [ cropCoordsFiles(coreCoords).folder filesep coreCoordsName ] );
         rect = croppingdata.rect;
-        boundingBox = [rect(1:2), rect(3:4) - rect(1:2)];
+        % Load mask
+        mask = imread( [ basePath sampleName filesep maskPath filesep 'core' iCore maskFileName ] );
+        l = size(mask);
+        if (l(1) == rect(4) - rect(2))
+            boundingBox = [rect(1:2), rect(3:4) - rect(1:2)];
+        else
+            boundingBox = [rect(1:2), rect(3:4) - rect(1:2) + 1 ];
+        end
+               
         core = zeros(boundingBox(4), boundingBox(3), numChannels); 
         if(boundingBox(3) ~= boundingBox(4))
             disp('First edge core, check it out')
@@ -79,10 +87,8 @@ parfor sample = 1:length(selected)
         box = num2cell(uint16(boundingBox));
         % Parfor doesn't allow initializing the bioformats reader out of
         % the loop
-        %sampleImage =  bfGetReader( [ basePath sampleName filesep omePath filesep sampleName omeSuffix ] );
-        % Load mask
-        mask = imread( [ basePath sampleName filesep maskPath filesep 'core' iCore maskFileName ] );
-        % Iterate over channels
+        sampleImage =  bfGetReader( [ basePath sampleName filesep omePath filesep sampleName omeSuffix ] );
+         % Iterate over channels
         for iChan=1:numChannelNames
             % Crop core from ome.tif
             core(:,:,iChan) = bfGetPlane(sampleImage, iChan, box{:});
@@ -93,7 +99,6 @@ parfor sample = 1:length(selected)
         
         % Quantify channels
         getMeanFunction = @(iChan) struct2array(regionprops(mask, core(:,:,iChan), 'MeanIntensity'))';
-        test = regionprops(mask, core(:,:, 1), 'MeanIntensity');
         meanIntensities = cell2mat(arrayfun(getMeanFunction,1:numChannelNames, 'UniformOutput',0));
 
         % Calculate morphological features
