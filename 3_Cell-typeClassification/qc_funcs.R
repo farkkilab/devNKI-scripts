@@ -2,22 +2,21 @@ plot_pie_charts = function(df, sample.name) {
   data.temp = df[[sample.name]]$GlobalCellType
   data.temp[which(df[[sample.name]]$GlobalCellType=='Immune.cells')] = df[[sample.name]]$ImmuneCellType[which(df[[sample.name]]$GlobalCellType=='Immune.cells')]
   data.temp[which(df[[sample.name]]$GlobalCellType=='Other2')] = 'Other'
-  if(!'NK.cells'%in%data.temp) data.temp = c(data.temp, 'NK.cells')
+  #if(!'NK.cells'%in%data.temp) data.temp = c(data.temp, 'NK.cells')
   data.temp = data.frame(cell.type=as.factor(data.temp))
   p = ggplot(data.temp, aes(x=factor(1), fill=cell.type)) + geom_bar(width=1) + coord_polar('y',start=0) + ggtitle(paste0('Composition of ',sample.name)) + ylab('Cell types') + xlab('') + scale_fill_brewer(palette="Paired")
   gname <- paste0("Pie_", sample.name, "_by_immuneCellType_",iteration,".pdf")
   ggsave(plot=p, filename = gname, device="pdf")
 }
 
-# This plots all charts to a single file
-
+#This plots all charts to a single file
 plot_pie_charts2 = function(df.pie) {
   data.temp = data.frame()
   for(sn in names(df.pie)) {
     tmp.df = data.frame(cell.type=df.pie[[sn]]$GlobalCellType, stringsAsFactors = F)
     tmp.df$cell.type[which(df.pie[[sn]]$GlobalCellType=='Immune.cells')] = df.pie[[sn]]$ImmuneCellType[which(df.pie[[sn]]$GlobalCellType=='Immune.cells')]
     tmp.df$cell.type[which(df.pie[[sn]]$GlobalCellType=='Other2')] = 'Other'
-    if(!'NK.cells'%in%tmp.df$cell.type) tmp.df = rbind(tmp.df, 'NK.cells')
+    #if(!'NK.cells'%in%tmp.df$cell.type) tmp.df = rbind(tmp.df, 'NK.cells')
     cells = table(tmp.df)
     tmp.df = data.frame(cell.counts=as.integer(cells),cell.type=names(cells))
     tmp.df$perc = tmp.df$cell.counts/sum(tmp.df$cell.counts)
@@ -71,7 +70,7 @@ plot_qc_plot = function(df.qc, df.new) {
   markerindex = rbind(add_missing_cols(indices[[1]],markerindex), indices[[1]])
   gateindex = rbind(add_missing_cols(indices[[2]],gateindex), indices[[2]])
   
-  
+
   
   # Scale the baseline to 1 and show the change as percentage
   #print('Scaling')
@@ -82,7 +81,7 @@ plot_qc_plot = function(df.qc, df.new) {
   #      gateindex[gateindex$sample==sample.name&gateindex$cell.type==cell.name&gateindex$iteration==iteration,]$index = gateindex[gateindex$sample==sample.name&gateindex$cell.type==cell.name&gateindex$iteration==iteration,]$index / gateindex[gateindex$sample==sample.name&gateindex$cell.type==cell.name&gateindex$iteration==old.iteration,]$index
   #    }
   #    if(old.iteration %in% subs$iteration) gateindex[gateindex$sample==sample.name&gateindex$cell.type==cell.name&gateindex$iteration==old.iteration,]$index = 1
-  #   
+  #    
   #  }
   #}
   
@@ -148,13 +147,14 @@ plot_umaps = function(lbld) {
   for(sample.name in names(lbld)) {
     sample.data = lbld[[sample.name]]
     # Take only 30% of cells to make the clustering faster
-    subdf = sample.data[sample(1:nrow(sample.data), floor(nrow(sample.data)/3)),1:(which(colnames(sample.data)=='Area')-1)]
+    cells_to_keep = sample(1:nrow(sample.data), floor(nrow(sample.data)/3))
+    subdf = sample.data[cells_to_keep,1:(which(colnames(sample.data)=='Area')-1)]
     #Cluster only with the markers used in gating
     subdf = cbind(subdf[,1],subdf[,which(marker.in.gates(colnames(subdf)))])
     # Ignore background
     subdf = subdf[,which(!colnames(subdf)%in%c('Mouse','Goat','Rabbit'))]
     # Adjust these parameters!
-    umap_s = uwot::umap(subdf[,-1], n_neighbors = 5, verbose = TRUE, n_threads = 7, fast_sgd = TRUE, min_dist = 0.001,metric = "euclidean")
+    umap_s = uwot::umap(subdf[,-1], n_neighbors = 5, verbose = TRUE, n_threads = 7, fast_sgd = TRUE, min_dist = 0.001,metric = "euclidean", y=as.factor(sample.data$GlobalCellType[cells_to_keep]))
     
     # Color by ctc calls
     indices = match(subdf[,1],sample.data$CellId)
@@ -172,7 +172,7 @@ plot_umaps = function(lbld) {
 index_sample = function(df, iterat){
   gateindex = data.frame()
   markerindex = data.frame()
-  for(sample.name in names(df)){
+  for(sample.name in names(df)){ 
     means.by.cell.type <- get_means(sample.name, df)
     rs = row.names(means.by.cell.type)
     means.by.cell.type= data.frame(means.by.cell.type %>% mutate_all(scale))
@@ -190,20 +190,19 @@ index_sample = function(df, iterat){
   return(list(markerindex, gateindex))
 }
 
-plot_heatmaps = function(labeled){
+plot_heatmaps = function(labeled, functionals=FALSE){
   ## Heatmaps for each cell type in each sample
   data.tmp <- labeled
   # Apply the amount of cell types you want to be shown in the plot
   data.tmp <- lapply(data.tmp, combine.gates) # Tumor - Stroma - Immune
   #data.tmp <- lapply(data.tmp, detailed.gates) # Tumor - Immune subtypes - Stroma
-  for(sample.name in names(data.tmp)){
-    means.by.cell.type <- get_means(sample.name, data.tmp)
-    #subtype)
-    plot.heatmap(means.by.cell.type, scalem = "column", title = sample.name, fname = paste(sample.name, "heatmap_means_by_cell_type",iteration,".pdf", sep = "_ "))
+  for(sample.name in names(data.tmp)){ 
+    means.by.cell.type <- get_means(sample.name, data.tmp,functionals)
+    plot.heatmap(means.by.cell.type, scalem = "column", title = sample.name, fname = paste0(sample.name, "_cell_type_means_",iteration,if(functionals)"_func" else "",".pdf"))
   }
 }
 
-get_means = function(sample.name, data.tmp) {
+get_means = function(sample.name, data.tmp,functionals) {
   cols <- grep(paste0("Id|",dnachannel,"|",bgchannels), colnames( data.tmp[[sample.name]]), invert = T, value = T)
   maxi <- which(cols == "Area")-1
   cols <- cols[1:maxi]
@@ -211,20 +210,20 @@ get_means = function(sample.name, data.tmp) {
   res <- data.tmp[[sample.name]] %>% group_by(cell.type) %>% summarise_at(.vars=cols, .funs=mean) ## change to median
   #res[1,1] <- "Other"
   res[which(is.na(res[,1])),1] <- 'Unknown'
-  if (sample.name == "Sample_13") {
-    for(lbl in c('CD45RO','FOXP3','CD3d')){
-      mincro <- min( res[[lbl]][res[lbl]!=min(res[lbl])] )
-      res[[lbl]][which(is.infinite(res[[lbl]]))] <- mincro
-    }
-  }
-  return(data.frame(res[,-1][,marker.in.gates(colnames(res[,-1]))], row.names = res$cell.type))
+  #if (sample.name == "Sample_13") {
+  #  for(lbl in c('CD45RO','FOXP3','CD3d')){
+  #    mincro <- min( res[[lbl]][res[lbl]!=min(res[lbl])] )
+  #    res[[lbl]][which(is.infinite(res[[lbl]]))] <- mincro
+  #  }
+  #}
+  return(data.frame(res[,-1][,marker.in.gates(colnames(res[,-1]),functionals)], row.names = res$cell.type))
 }
 
 plot.heatmap <- function(data, scalem="none", title=NULL, fname=NA, ann_col=NULL, ann_row=NULL, colors=NULL) {
   #mat <- scale( as.matrix(data) )
   pheatmap(as.matrix(data),
            show_rownames=T,show_colnames=T,cluster_rows=T,cluster_cols=T,
-           cellheight=12,cellwidth=10,fontsize_row=12,fontsize_col=12,
+           cellheight=12,cellwidth=12,fontsize_row=12,fontsize_col=12,
            color=colorRampPalette(c("#0e74b3","white","#cf242a"),interpolate="linear")(200),
            border_color="white", annotation_col=ann_col, annotation_colors = colors,
            annotation_row=ann_row,
@@ -269,7 +268,7 @@ save.corrplot <- function(df, marker_cols){
 }
 
 
-print.xy.plot <- function(df, sample.name, base.or.immune =T){
+print.xy.plot <- function(df, sample.name, base.or.immune =T){ 
   df$cell.type <- df$GlobalCellType
   if(base.or.immune) df$cell.type[which(df$GlobalCellType=="Immune.cells")] <- df$ImmuneCellType[which(df$GlobalCellType=="Immune.cells")]
   #df$cell.type[which(df$GlobalCellType=="Tumor.cells")] <- df$tumorType[which(df$GlobalCellType=="Tumor.cells")]
@@ -299,4 +298,10 @@ add_missing_cols = function(df.new, df.old) {
     }
   }
   return(df.old)
+}
+# This function requires you to source the gates to memory and to have gates with the names global.gates and immune.gates
+marker.in.gates = function(x,functionals=FALSE){
+  included = x%in%unlist(global.gates)|x%in%unlist(immune.gates) #|x%in%unlist(stroma.gates))
+  if(functionals) included = !included
+  return(included)
 }

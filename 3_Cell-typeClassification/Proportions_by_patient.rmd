@@ -1,0 +1,109 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+#By patient get the proportion of cells
+
+project.path = "D:/users/fperez/NKI_TMAs_AF/"
+tribus.subfolder = "Tribus_Cell-segment2"
+proportions.file.suffix = "_cellTypesNapari.csv"
+CellTypes2ignore = c("InsideROI", "LostCell", "LowDapi", "Out.of.core")
+cores2ignore1 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/Total_cores_to_ignore.csv", sep=",")
+cores2ignore2 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/Total_extra-cores_to_ignore.csv", sep = ",", header = TRUE)
+
+#File with patient IDs and coreIDs relationship
+samples2cycif <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt", sep = "\t", header = TRUE)
+
+
+#Merging files with cores to ignore and excluding those from the samples2cycif table
+cores2ignore2 <- cores2ignore2[,-3]
+colnames(cores2ignore1) <- colnames(cores2ignore2)
+cores2ignore <- rbind(cores2ignore2, cores2ignore1)
+cores2ignore[,2] <- paste0("core",cores2ignore[,2])
+
+cols <- sapply(1:nrow(cores2ignore), function(x){
+  col <- which(samples2cycif$cycif.slide == cores2ignore[x,1] & samples2cycif$cycif.core.id == cores2ignore[x,2])
+  return(col)
+})
+
+samples2cycif <- samples2cycif[-sort(unlist(cols)),] #Ignoring cores that do not passed QC
+samples2cycif <- samples2cycif[which(samples2cycif$patient != "OC liver"),] #Ignoring control samples
+
+
+proportions.all <- NULL
+for (p in unique(samples2cycif$patient)){
+    p.samples2cycif <- samples2cycif[samples2cycif$patient == p,]
+    slide = unique(p.samples2cycif$cycif.slide)
+    patient.cells <- NULL
+    for (core in unique(p.samples2cycif$cycif.core.id)){
+      file = paste0(project.path, "/", slide, "/", tribus.subfolder, "/", core, proportions.file.suffix)
+      D <- read.csv(file, sep=',', stringsAsFactors = F, header=TRUE)
+      patient.cells <- rbind(patient.cells, D)
+    }
+    cells.numbers <- table(patient.cells$GlobalCellType)
+    cells.numbers <- cells.numbers[!(names(cells.numbers) %in% CellTypes2ignore)] #Ignoring non-cells
+    total.cells <- sum(cells.numbers)
+    cells.proportions <- as.data.frame(signif(cells.numbers * 100 /total.cells,2))
+    cells.proportions$patient <- rep(p, nrow(cells.proportions))
+    colnames(cells.proportions)[1] <- "Cell.type"
+    #cells.proportions <- c(cells.proportions, p)
+    #names(cells.proportions)[length(cells.proportions)] <- "Patient"
+    proportions.all <- rbind(proportions.all, cells.proportions)
+}
+proportions.all$Cell.type <- gsub("Myeloid.cells", "Myeloid",proportions.all$Cell.type)
+proportions.all$Cell.type <- gsub("Lymphoid2", "CD8", proportions.all$Cell.type)
+proportions.all
+```
+
+```{r}
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(forcats)
+
+proportions.all
+
+
+Cell.proportions = data.frame(Patient=proportions.all[,3], Cell.type=proportions.all[,1], values=proportions.all[,2])
+Cell.proportions2 <- dcast(Cell.proportions, Patient ~ Cell.type)
+for (c in 1:ncol(Cell.proportions2)){
+  Cell.proportions2[,c][which(is.na(Cell.proportions2[,c]))] <- 0
+}
+Cell.proportions2
+```
+
+
+
+```{r}
+
+df2 = proportions.all %>% 
+    ungroup() %>%
+    arrange(fct_relevel(Cell.type, "Tumor"), Freq) %>%
+    mutate(patient = fct_inorder(patient) )
+
+p <- ggplot(data=df2, aes(x=patient,y=Freq,fill=Cell.type)) + geom_col(position = position_stack(reverse = TRUE))
+p <- p + theme(text=element_text(size=9),
+               axis.text.x = element_text(size=3, angle = 90, vjust = 0.5, hjust=1),
+               panel.border = element_rect(linetype = "solid", fill = NA),
+               panel.background = element_rect(fill = "white"),
+               panel.grid.major = element_line(size = 0.5, linetype = 'solid', colour = "lightgrey"),
+               panel.grid.minor = element_line(size = 0.5, linetype = 'solid', colour = "lightgrey"),
+               panel.grid.major.x = element_blank(),
+               panel.grid.minor.x = element_blank())
+p <- p + xlab("Patient")
+ggsave(p, filename = "Cell-proportions-by-patient.png", width = 10, height = 7)
+p
+
+```
+
+
+```{r}
+#Cores by patient
+
+hist(table(samples2cycif$patient), xlab="Number of cores", main="Cores by patient", ylab="Number of patients")
+table(table(samples2cycif$patient))
+```
+
+

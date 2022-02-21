@@ -1,11 +1,12 @@
-
-
-cellTypeCaller <- function(df, gates, gates.class="", folder.name=folder.name) {
+cellTypeCaller <- function(df, gates, gates.class="", folder.name=folder.name, grid.size.xdim=15, hierarchical.trees=TRUE, scaling=TRUE) {
   marker_cols <- unique(unlist(gates))
   mat <- as.matrix(df[, marker_cols])
   #mat[mat<=0] <- 1 ## Quick fix because of HG0034 showing extreme bad signal. Requires detailed analyses in QC step.
-  mat <- scale(mat)
-  mat <- BBmisc::normalize(mat, method='range')
+  if (scaling){
+    print ("Starting to scale data")
+    mat <- scale(mat)
+    mat <- BBmisc::normalize(mat, method='range')
+  }
   data_FlowSOM <- flowCore::flowFrame(mat)
   
   n.cell.types <- length(gates)
@@ -14,15 +15,17 @@ cellTypeCaller <- function(df, gates, gates.class="", folder.name=folder.name) {
   set.seed(42)
   
   # run FlowSOM
-  out <- FlowSOM::ReadInput(data_FlowSOM, transform = FALSE, scale = TRUE)
-  out <- FlowSOM::BuildSOM(out, colsToUse = marker_cols, silent=T, xdim=10, ydim=10)
+  out <- FlowSOM::ReadInput(data_FlowSOM, transform = FALSE, scale = FALSE)
+  out <- FlowSOM::BuildSOM(out, colsToUse = marker_cols, silent=T, xdim=grid.size.xdim, ydim=grid.size.xdim)
   out <- FlowSOM::BuildMST(out, silent=T)
   # save hierarchical trees colored by markers
-  pdf(paste0(folder.name, "/",gates.class,"_marker_expr_by_node.pdf"))
-  for(chan in marker_cols){
-    PlotMarker(out, chan)
+  if (hierarchical.trees){
+    pdf(paste0(folder.name, "/",gates.class,"_marker_expr_by_node.pdf"))
+    for(chan in marker_cols){
+      PlotMarker(out, chan)
+    }
+    tryCatch({dev.off()},error=function(cond){return(NA)})
   }
-  tryCatch({dev.off()},error=function(cond){return(NA)})
   
   # Gate scores for each node
   gate.scores.by.node <- list()
@@ -68,11 +71,13 @@ cellTypeCaller <- function(df, gates, gates.class="", folder.name=folder.name) {
                 cellheight=4,cellwidth=10,fontsize_row=4,fontsize_col=12,
                 color=colorRampPalette(c("blue","white","red"),interpolate="linear")(300),
                 border_color="white", scale='none',
-                annotation_row = ann_row, cutree_rows = k, annotation_legend = FALSE,
+                annotation_row = ann_row, cutree_rows =max(nodeID.per.cell), annotation_legend = FALSE,
                 filename =paste0(folder.name, "/",gates.class,"_normalized_scores_heatmap.pdf"))
+  #cutree_rows =k
   
   # Set labels based on clustering of scores and highest scored gate on each node
-  node.class.id <- cutree(p$tree_row, k=k)
+  #node.class.id <- cutree(p$tree_row, k=k) #To do not cut the tree
+  node.class.id <- cutree(p$tree_row, k=max(nodeID.per.cell))
   class.mean.scores <- aggregate(annotation.scores, by=list(node.class.id), mean)[,-1]
   cutoffs <- apply(class.mean.scores, 2, min)
   class.labels <- apply(class.mean.scores, 1, function(x) {
@@ -92,5 +97,8 @@ cellTypeCaller <- function(df, gates, gates.class="", folder.name=folder.name) {
   PlotStars(out, backgroundValues=node.labels)
   tryCatch({dev.off()},error=function(cond){return(NA)})
   
-  return(df[,c('CellId',gates.class)])
+  #return(df[,c('CellId',gates.class)])
+  res1 <- df[,c('CellId',gates.class)]
+  rest.return <- list(res1, annotation.scores, nodeID.per.cell)
+  return(rest.return)
 }
