@@ -1,0 +1,630 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+
+```{r}
+library(corrplot)
+library(reshape2)
+library(ggplot2)
+library(gridExtra)
+library(ggpubr)
+library(CytoTree)
+library(flowCore)
+library(stringr)
+library("dplyr")
+theme_set(theme_pubr())
+library(FlowSOM)
+
+
+source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/qc_functions.R")
+source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/cell_type_caller_functions.R")
+
+
+outout.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Cell_class_analysis/"
+```
+#Reading clinical info
+
+```{r}
+cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.csv", sep=",", header = TRUE)
+
+clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
+
+clin.tcycif$cycif.core.id <- as.numeric(gsub("core","",clin.tcycif$cycif.core.id))
+```
+
+#Reading whole dataset
+```{r}
+whole.dataset <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_slides_cellTypes.csv", sep=",", header = TRUE)
+
+dataset <- whole.dataset[whole.dataset$GlobalCellType != "LowDapi",]
+
+slidenames <- sapply(dataset$Row_number, function(x){
+  splitted <- strsplit(x, "_")[[1]]
+  paste(splitted[1],splitted[2],splitted[3], sep="_")
+  })
+
+dataset$Slide <- slidenames
+
+dat.immune <- dataset[dataset$GlobalCellType != "Cancer" & 
+                        !grepl("Stromal", dataset$GlobalCellType),]
+dat.cancer <- dataset[dataset$GlobalCellType == "Cancer",]
+dat.stromal <- dataset[grepl("Stromal", dataset$GlobalCellType),]
+```
+
+
+
+#Preparing input data
+```{r}
+t.cancer <- dat.cancer
+t.stromal <- dat.stromal
+```
+
+```{r}
+colnames(t.cancer)[ncol(t.cancer)] <- colnames(clin.tcycif)[2]
+colnames(t.cancer)[2] <- colnames(clin.tcycif)[3]
+cancer.dat <- merge(t.cancer, clin.tcycif, by = c("cycif.slide", "cycif.core.id")) 
+
+colnames(t.stromal)[ncol(t.stromal)] <- colnames(clin.tcycif)[2]
+colnames(t.stromal)[2] <- colnames(clin.tcycif)[3]
+stromal.dat <- merge(t.stromal, clin.tcycif, by = c("cycif.slide", "cycif.core.id")) 
+
+rm(t.stromal)
+rm(t.cancer)
+```
+
+
+```{r}
+#Function to scale the dataset
+scale.dataset <- function(dataset, channels, last.antibody.channel=11, norm.by=NA){
+  if (!is.na(norm.by)){
+    table.scaled <- NULL
+    for (i in unique(dataset[,norm.by])){
+      data.subset <- dataset[dataset[,norm.by] %in% i,channels]
+      table.dat  <- log2(data.subset[,1:last.antibody.channel])
+      table.cat = cbind(table.dat, data.subset[,(last.antibody.channel+1):length(channels)])
+      data.filtered.trim <- z.trimming(table.cat) #Truncating data to 0.999 percentile
+      mat.dat <- data.filtered.trim[[1]]
+      table.scaled.set <- scale(mat.dat) #Z-score normalization
+      table.scaled.set <- apply(table.scaled.set,2,min_max_norm) #Min.Max normalization
+      table.scaled <- rbind(table.scaled, table.scaled.set)
+    }
+  }else{
+    table <- dataset[,channels]
+    table.dat  <- log2(table[,1:last.antibody.channel])
+    table = cbind(table.dat, table[,(last.antibody.channel+1):length(channels)])
+    data.filtered.trim <- z.trimming(table)
+    mat.dat <- data.filtered.trim[[1]]
+    table.scaled <- scale(mat.dat)
+  }
+  return(table.scaled)
+}
+
+#Function to run FlowSOM in dataset
+Flowsom_metaclusters <- function(datainput, k=10){
+  out <- FlowSOM::ReadInput(datainput, transform = FALSE, scale = FALSE)
+  out <- FlowSOM::BuildSOM(out, colsToUse = colnames(datainput), silent=T, xdim=85, ydim=85)
+  out <- FlowSOM::BuildMST(out, silent=T)
+  metaClustering <- as.character(metaClustering_consensus(out$map$codes, k = k))
+  metaClustering_perCell <- GetMetaclusters(out, metaClustering)
+  return(metaClustering_perCell)
+}
+
+#Running FloWSOM and 
+som.metaclustering <- function(dataset, kval=10, tempdir){
+out.som <- FlowSOM::ReadInput(dataset, transform = FALSE, scale = FALSE)
+out.som <- FlowSOM::BuildSOM(out.som, colsToUse = colnames(dataset), silent=T, xdim=75, ydim=75)
+out.som <- FlowSOM::BuildMST(out.som, silent=T)
+out.results <- suppressMessages(ConsensusClusterPlus::ConsensusClusterPlus(t(out.som$map$codes), 
+        maxK = 18, reps = 300, pItem = 0.9, pFeature = 1, title = tempdir, 
+        plot = "png", verbose = FALSE, clusterAlg = "hc", 
+        distance = "euclidean", seed = NULL))
+metaclusters <- out.results[[kval]]$consensusClass
+return(metaclusters[out.som$map$mapping[,1]])
+}
+
+
+#Channels used for the metaclustering
+interesting.channels.stromal <- c("pTBK1","Ki67","Vimentin", "pSTAT1", "MHCI",
+                      "ECadherin","aSMA","CD31","Area","Eccentricity","Roundness")
+
+interesting.channels.cancer <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin",
+                          "CK7","Area","Eccentricity", "Roundness")
+
+
+#Scaling datasets
+mat.stromal <- scale.dataset(stromal.dat, interesting.channels.stromal,
+                             last.antibody.channel = 8, norm.by = "cycif.slide")
+
+mat.cancer <- scale.dataset(cancer.dat, interesting.channels.cancer,
+                             last.antibody.channel = 6, norm.by = "cycif.slide")
+
+
+tmpdir.cancer <- "D:/users/fperez/NKI_TMAs_AF/Cell_class_analysis/SOM_consensusClusters_cancer_Slide-scaled3/"
+tmpdir.stromal <- "D:/users/fperez/NKI_TMAs_AF/Cell_class_analysis/SOM_consensusClusters_stromal_Slide-scaled3/"
+
+metalabels.cancer <- som.metaclustering(mat.cancer, kval = 8, tmpdir.cancer)
+
+metalabels.stromal <- som.metaclustering(mat.stromal, kval = 8, tmpdir.stromal)
+
+```
+
+
+
+```{r}
+#A big function to plot UMAPs, downscaling dataset
+#Extralabels should be a list of vectors
+channel.UMAPs <- function(df, cell.labels, extralabels=NULL, rowselectionstatus=NULL, sub.sample=FALSE,
+                          n.sampling=10000, user.colors=mycolors, umap_neighbors=30, umap_mindist=0.30){
+  if (!is.null(rowselectionstatus)){
+    df <- df[rowselectionstatus,]
+  }
+  
+  if (sub.sample){
+    sampling.rows <- sample(1:nrow(df), n.sampling)
+    df <- df[sampling.rows,]
+    cell.labels <- cell.labels[sampling.rows]
+    if (!is.null(extralabels)){
+      for (i in 1:length(extralabels)){
+        extralabels[[i]] <- extralabels[[i]][sampling.rows]
+      }
+    }
+  }
+  
+  umap_s = uwot::umap(df, n_neighbors = umap_neighbors, scale=FALSE, spread=1.5, min_dist = umap_mindist, n_epochs = 60)
+  
+  uplot = data.frame(x = umap_s[,1], y= umap_s[,2])
+  pltChannels <- list()
+  pltChannels <- lapply(1:ncol(df), function(x){
+    markers <- df[, x]
+    p = ggplot(data=uplot,aes(x,y, color=markers)) + geom_point(size=0.3, stroke=0, alpha=0.7)+ 
+      #guides(color = guide_legend(override.aes = list(size=5))) + 
+      theme_bw() + coord_fixed(ratio=1)+ 
+      xlab("umap1") + ylab("umap2") + theme(legend.position="none") + theme(aspect.ratio=1) +
+      scale_colour_gradient(low = "#103254", high="green")
+    p <- p + ggtitle(colnames(df)[x])
+    return(p)
+  })
+  
+  Subtype <- factor(cell.labels, levels=unique(cell.labels))
+  #df <- cbind(df$Subtype)
+  
+  pl = ggplot(uplot,aes(x,y, color=Subtype))+ geom_point(size=0.4, stroke=0, alpha=0.7)+ 
+    geom_density_2d(color="grey60", alpha=0.6) +
+    scale_fill_viridis(discrete = TRUE) + 
+    guides(color = guide_legend(override.aes = list(size=10))) + 
+    scale_color_manual(values=user.colors) + theme_bw() + coord_fixed(ratio=1)+
+    guides(colour = guide_legend(override.aes = list(size=10, shape=15, alpha=1), direction="horizontal", ncol=2, label.position="bottom", byrow=F)) + 
+    xlab("umap1") + ylab("umap2") + #ylim(-10, 10) + 
+    theme(legend.title = element_blank(), aspect.ratio=1.1)
+  
+  plots = list(pltChannels,pl)
+  
+  if(!is.null(extralabels)){
+    pltExtras <- lapply(1:length(extralabels), function(x){
+      extralabel <- factor(extralabels[[x]], levels=unique(extralabels[[x]]))
+      px = ggplot(uplot,aes(x,y, color=extralabel))+ geom_point(size=0.4, stroke=0, alpha=0.7)+ 
+          geom_density_2d(color="grey60", alpha=0.6) +
+          scale_fill_viridis(discrete = TRUE) + 
+          guides(color = guide_legend(override.aes = list(size=10))) + 
+          scale_color_manual(values=user.colors) + theme_bw() + coord_fixed(ratio=1)+
+          guides(colour = guide_legend(override.aes = list(size=10, shape=15, alpha=1),
+          direction="horizontal", ncol=2, label.position="bottom", byrow=F)) + 
+          xlab("umap1") + ylab("umap2") + #ylim(-10, 10) + 
+          theme(legend.title = element_blank(), aspect.ratio=1.1)
+      return(px)
+  })
+  }
+  plots = append(plots,pltExtras)
+  return(plots)
+}
+
+```
+
+
+
+#Exploring metaclusters
+```{r}
+mat.cancer2  <- as.data.frame(mat.cancer)
+Metacluster.ID <- paste0("Cluster",metalabels.cancer)
+mat.cancer2 <- cbind(mat.cancer2, Metacluster.ID)
+
+mat.stromal2  <- as.data.frame(mat.stromal)
+Metacluster.ID <- paste0("Cluster",metalabels.stromal)
+mat.stromal2 <- cbind(mat.stromal2, Metacluster.ID)
+
+
+#Generating heatmaps of marker expression by cell.type
+ind.plots.cancer = index_plots(mat.cancer2, mat.cancer2,
+                        gates.input=list(Pos=interesting.channels.cancer),
+                        scaling = "z.score", log2.transform = FALSE,
+                        GlobalCellType = "Metacluster.ID")
+
+ind.plots.stromal = index_plots(mat.stromal2, mat.stromal2,
+                        gates.input=list(Pos=interesting.channels.stromal),
+                        scaling = "z.score", log2.transform = FALSE,
+                        GlobalCellType = "Metacluster.ID")
+
+
+pdf(file= paste0(outout.folder.name,"Metaclusters_Cancer_Heatmap_Slide-scaled2.pdf"), height = 8, width = 10)
+print(ind.plots.cancer[[3]])
+dev.off()
+
+pdf(file= paste0(outout.folder.name,"Metaclusters_Stromal_Heatmap_Slide-scaled2.pdf"), height = 8, width = 10)
+print(ind.plots.stromal[[3]])
+dev.off()
+
+
+mycolors.clusters <- colorRampPalette(brewer.pal(12, "Paired"))(12)
+metacluster_types <- factor(mat.stromal2$Metacluster.ID, levels=(unique(mat.stromal2$Metacluster.ID)))
+#Metacluster
+umaps.stromal <- channel.UMAPs(mat.stromal2[,interesting.channels.stromal], metacluster_types,
+                               extralabel=list(dat.stromal$Slide, stromal.dat$therapy_sequence,
+                                               stromal.dat$Molecular_profile, stromal.dat$incyear),
+                               rowselectionstatus=NULL, sub.sample = TRUE, n.sampling = 25000,
+                               user.colors=mycolors.clusters, umap_neighbors =50, umap_mindist=0.2)
+
+
+metacluster_types <- factor(mat.cancer2$Metacluster.ID, levels=(unique(mat.cancer2$Metacluster.ID))) 
+umaps.cancer <- channel.UMAPs(mat.cancer2[,interesting.channels.cancer], metacluster_types,
+                               extralabel=list(dat.cancer$Slide, cancer.dat$therapy_sequence,
+                                               cancer.dat$Molecular_profile, cancer.dat$incyear),
+                               rowselectionstatus=NULL, sub.sample = TRUE, n.sampling = 25000,
+                               user.colors=mycolors.clusters, umap_neighbors =50, umap_mindist=0.2)
+
+umap.outputnames <- c("clusterLabel","Slide", "Therapy", "MolProfile","Year")
+
+ggsave(file=paste0(outout.folder.name,"Metaclusters_Stromal_UMAPs_channels_Slide-scaled2.pdf"),
+       arrangeGrob(grobs = umaps.stromal[[1]], ncol = 4), height = 12, width = 10)
+ggsave(file=paste0(outout.folder.name,"Metaclusters_Stromal_UMAPs_channels_Slide-scaled2.png"),
+       arrangeGrob(grobs = umaps.stromal[[1]], ncol = 4), height = 5.3, width = 6.1)
+for (i in 2:length(umaps.stromal)){
+  j <- i-1
+  ggsave(file=paste0(outout.folder.name,"Metaclusters_Stromal_UMAPs_",umap.outputnames[j],"_Slide-scaled2.pdf"),
+       umaps.stromal[[i]], height = 6.89, width = 7.93)
+}
+
+
+ggsave(file=paste0(outout.folder.name,"Metaclusters_Cancer_UMAPs_channels_Slide-scaled2.pdf"),
+       arrangeGrob(grobs = umaps.cancer[[1]], ncol = 4), height = 12, width = 10)
+ggsave(file=paste0(outout.folder.name,"Metaclusters_Cancer_UMAPs_channels_Slide-scaled2.png"),
+       arrangeGrob(grobs = umaps.cancer[[1]], ncol = 4), height = 5.3, width = 6.1)
+for (i in 2:length(umaps.cancer)){
+  j <- i-1
+  ggsave(file=paste0(outout.folder.name,"Metaclusters_Cancer_UMAPs_",umap.outputnames[j],"_Slide-scaled2.pdf"),
+       umaps.cancer[[i]], height = 6.89, width = 7.93)
+}
+
+```
+
+
+
+```{r}
+stromal.dat$Metacluster.ID <- mat.stromal2$Metacluster.ID
+cancer.dat$Metacluster.ID <- mat.cancer2$Metacluster.ID
+
+cluster.counts.strom  <- stromal.dat %>% 
+                         group_by(Metacluster.ID, cycif.slide) %>%
+                         summarise(N = n()) %>%
+                         mutate(Total_in_cluster = sum(N), 
+                         Ratio = round(N/Total_in_cluster, 2))
+
+cluster.counts.can  <- cancer.dat %>% 
+                         group_by(Metacluster.ID, cycif.slide) %>%
+                         summarise(N = n()) %>%
+                         mutate(Total_in_cluster = sum(N), 
+                         Ratio = round(N/Total_in_cluster, 2))
+p.strom = ggplot(cluster.counts.strom, aes(x=Metacluster.ID, y=Ratio, fill=cycif.slide)) + 
+      geom_bar(stat="identity", color="black", position=position_dodge()) +
+      theme_minimal() + labs(title="Stromal metaclusters")
+
+
+p.can= ggplot(cluster.counts.can, aes(x=Metacluster.ID, y=Ratio, fill=cycif.slide)) + 
+      geom_bar(stat="identity", color="black", position=position_dodge()) +
+      theme_minimal() + labs(title="Cancer metaclusters")
+
+
+cluster.counts.strom2  <- stromal.dat %>% 
+                         group_by(Metacluster.ID, therapy_sequence) %>%
+                         summarise(N = n()) %>%
+                         mutate(Total_in_cluster = sum(N), 
+                         Ratio = round(N/Total_in_cluster, 2))
+
+cluster.counts.can2  <- cancer.dat %>% 
+                         group_by(Metacluster.ID, therapy_sequence) %>%
+                         summarise(N = n()) %>%
+                         mutate(Total_in_cluster = sum(N), 
+                         Ratio = round(N/Total_in_cluster, 2))
+
+p2.strom = ggplot(cluster.counts.strom2, aes(x=Metacluster.ID, y=Ratio, fill=therapy_sequence)) + 
+          geom_bar(stat="identity", color="black", position=position_dodge()) +
+          theme_minimal() + labs(title="Stromal metaclusters")
+
+
+p2.can  = ggplot(cluster.counts.can2, aes(x=Metacluster.ID, y=Ratio, fill=therapy_sequence)) + 
+          geom_bar(stat="identity", color="black", position=position_dodge()) +
+          theme_minimal() + labs(title="Cancer metaclusters")
+
+
+cluster.counts.strom3  <- stromal.dat %>% 
+                         group_by(Metacluster.ID, Molecular_profile) %>%
+                         summarise(N = n()) %>%
+                         mutate(Total_in_cluster = sum(N), 
+                         Ratio = round(N/Total_in_cluster, 2))
+
+cluster.counts.can3  <- cancer.dat %>% 
+                         group_by(Metacluster.ID, Molecular_profile) %>%
+                         summarise(N = n()) %>%
+                         mutate(Total_in_cluster = sum(N), 
+                         Ratio = round(N/Total_in_cluster, 2))
+
+
+p3.strom = ggplot(cluster.counts.strom3, aes(x=Metacluster.ID, y=Ratio, fill=Molecular_profile)) + 
+          geom_bar(stat="identity", color="black", position=position_dodge()) +
+          theme_minimal() + labs(title="Stromal metaclusters")
+
+
+p3.can  = ggplot(cluster.counts.can3, aes(x=Metacluster.ID, y=Ratio, fill=Molecular_profile)) + 
+          geom_bar(stat="identity", color="black", position=position_dodge()) +
+          theme_minimal() + labs(title="Cancer metaclusters")
+
+
+ggsave(p.strom, filename = paste0(outout.folder.name, "Metaclusters_Stromal_slide_ratio2",".png"),
+       width = 24, height = 10, units = "cm")
+
+ggsave(p.can, filename = paste0(outout.folder.name, "Metaclusters_Cancer_slide_ratio2",".png"),
+       width = 24, height = 10, units = "cm")
+
+ggsave(p2.strom, filename = paste0(outout.folder.name, "Metaclusters_Stromal_therapy_ratio2",".png"),
+       width = 24, height = 10, units = "cm")
+
+ggsave(p2.can, filename = paste0(outout.folder.name, "Metaclusters_Cancer_therapy_ratio2",".png"),
+       width = 24, height = 10, units = "cm")
+
+ggsave(p3.strom, filename = paste0(outout.folder.name, "Metaclusters_Stromal_MolProfile_ratio2",".png"),
+       width = 24, height = 10, units = "cm")
+
+ggsave(p3.can, filename = paste0(outout.folder.name, "Metaclusters_Cancer_MolProfile_ratio2",".png"),
+       width = 24, height = 10, units = "cm")
+```
+
+
+
+
+```{r}
+#Writing results in Napary format
+CoreSuffix <- "_Probabilities_cytomask2"
+project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
+outputfolder <- "Metaclusters_Napary"
+
+for (i in unique(stromal.dat$cycif.slide)[1]){
+  i <- "TMA_18_810"
+  set.stromal <- stromal.dat[stromal.dat$cycif.slide == i,]
+  set.stromal$Metacluster.ID <- sub("Cluster","StromalClus",set.stromal$Metacluster.ID)
+  set.cancer <- cancer.dat[cancer.dat$cycif.slide == i,]
+  set.cancer$Metacluster.ID <- sub("Cluster","CancerClus",set.cancer$Metacluster.ID)
+  cells.slide <- rbind(set.stromal, set.cancer)
+  for (core in unique(cells.slide$cycif.core.id)){
+    cells.core <- cells.slide[cells.slide$cycif.core.id == core,]
+    df <- data.frame(Core_Names=paste0("core",cells.core$cycif.core.id,CoreSuffix),
+                     Cellid=cells.core$CellId,
+                     lost=cells.core$lost,
+                     GlobalCellType=cells.core$Metacluster.ID)
+    df <- df[order(df$Cellid),]
+    write.table(df, file=paste0(project.folder, i,"/", outputfolder,"/","core",core,"_metaclusters_Napary.csv"),
+                sep=",", row.names = FALSE)
+  }
+}
+```
+
+
+
+
+```{r}
+#Taking median by year, and plotting median points
+interesting.channels <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin", "CK7", "aSMA")
+
+#For all samples
+median.exp.by.year <- function(dataset, channels){
+  med.dataframe <- NULL
+  for (year in unique(dataset[,"incyear"])){
+    table.dat.set <- dataset[which(dataset[,"incyear"] == year),]
+    medians <- sapply(interesting.channels, function (x) median(log2(table.dat.set[,x])))
+    med.dataframe.aux <- data.frame(year=year, median=medians, channel=interesting.channels)
+    med.dataframe <- rbind(med.dataframe, med.dataframe.aux)
+  }
+  med.dataframe <- med.dataframe[med.dataframe$year != "2007",]
+  
+  med.plots <- lapply(channels, function(x){
+    ggplot(subset(med.dataframe, med.dataframe$channel %in% x),
+           aes(x=year,y=median)) + geom_point() + labs(title =x) +
+      theme(axis.text.x = element_text(angle = 45, hjust=1))
+  })
+  return(med.plots)
+}
+
+datasets <- list(table.dat, table.dat1)
+name.datasets <- c("Cancer","Stromal")
+
+for (i in 1:length(datasets)){
+  dat <- datasets[[i]]
+  #For all cancer cells samples
+  medians.alldata <- median.exp.by.year(dat, interesting.channels)
+  ggsave(file=paste0(outout.folder.name,"Medians_channels_years_",name.datasets[i],"Cells.png"), arrangeGrob(grobs = medians.alldata, ncol = 2), height = 7.3, width = 7.1)
+  
+  #Only for samples treated by PDS
+  table.dat.pds  <- dat[dat$therapy_sequence == "Primairy debulking",]
+  medians.alldata <- median.exp.by.year(table.dat.pds, interesting.channels)
+  ggsave(file=paste0(outout.folder.name,"Medians_channels_years_",name.datasets[i],"Cells-PDS.png"), arrangeGrob(grobs = medians.alldata, ncol = 2), height = 7.3, width = 7.1)
+  
+  #Only for samples treated by NACT
+  table.dat.nact  <- dat[dat$therapy_sequence == "NACT",]
+  medians.alldata <- median.exp.by.year(table.dat.nact, interesting.channels)
+  ggsave(file=paste0(outout.folder.name,"Medians_channels_years_",name.datasets[i],"Cells-NACT.png"), arrangeGrob(grobs = medians.alldata, ncol = 2), height = 7.3, width = 7.1)
+}
+
+```
+
+
+
+
+```{r}
+interesting.channels <- c("Ki67","Vimentin","pSTAT1", "MHCI",
+                          "ECadherin", "CK7", "aSMA", "CD31")
+
+med.dataframe <- NULL
+
+for (year in unique(table.dat1[,"centre"])){
+  table.dat.set <- table.dat1[which(table.dat1[,"centre"] == year),]
+  medians <- sapply(interesting.channels, function (x) median(log2(table.dat.set[,x])))
+  med.dataframe.aux <- data.frame(year=year, median=medians, channel=interesting.channels)
+  med.dataframe <- rbind(med.dataframe, med.dataframe.aux)
+}
+
+med.dataframe$year <- as.factor(med.dataframe$year)
+
+med.plots <- lapply(interesting.channels, function(x){
+  ggplot(subset(med.dataframe, med.dataframe$channel %in% x), aes(x=year,y=median)) + geom_point() + labs(title =x, x="Centre") + theme(axis.text.x = element_text(angle = 45, hjust=1))
+})
+
+ggsave(file=paste0(outout.folder.name,"Medians_channels_centre_Stromal", suffix, ".png"), arrangeGrob(grobs = med.plots, ncol = 2), height = 7.3, width = 7.1)
+```
+
+
+
+##Selecting channels for inspection in UMAPs and correlations
+
+```{r}
+#interesting.channels <- c("pTBK1","Ki67","Vimentin", "pSTAT1", "PDL1_2",
+#                          "yH2AX", "cPARP1", "MHCI", "ECadherin", "CK7")
+
+suffix <- "_2"
+
+
+#interesting.channels <- c("pTBK1","Ki67","Vimentin","aSMA", "pSTAT1", "ECadherin")
+
+table.data  <- log2(table[,interesting.channels[1:11]])
+data.filtered.trim <- z.trimming(table.data)
+table.data <- data.filtered.trim[[1]]
+table.data <- cbind(table.data, table[,interesting.channels[12:length(interesting.channels)]])
+
+densities.by.channels <- channel.densities(table.data)
+ggsave(file=paste0(outout.folder.name,"Stromal_channel_densities", suffix, ".pdf"), arrangeGrob(grobs = densities.by.channels, ncol = 4), height = 16, width = 16)
+
+
+table.data.scaled <- scale(table.data)
+#able.data.scaled = BBmisc::normalize(table.data.scaled, method='range')
+
+
+n = 100000
+to.sample <- sort(sample(c(1:nrow(table.data)), n))
+
+table.data.scaled.set <- table.data.scaled[to.sample,]
+
+pdf(file= paste0(outout.folder.name,"Stromal_marker-Correlations", suffix, ".pdf"))
+heatmap(cor(table.data.scaled.set), symm = TRUE)
+dev.off()
+
+df =  table.data.scaled.set
+umap_s = uwot::umap(df, n_neighbors = 50, scale=FALSE , spread=1.5, min_dist = 0.10, n_epochs = 60)
+uplot = data.frame(x = umap_s[,1], y= umap_s[,2])
+pltChannels <- list()
+pltChannels <- lapply(1:ncol(df), function(x){
+  markers <- df[, x]
+  p = ggplot(data=uplot,aes(x,y, color=markers)) + geom_point(size=0.3, stroke=0, alpha=0.7)+
+    #guides(color = guide_legend(override.aes = list(size=5))) +
+    theme_bw() + coord_fixed(ratio=1)+
+    xlab("umap1") + ylab("umap2") + theme(legend.position="none") + theme(aspect.ratio=1) +
+    scale_colour_gradient(low = "#103254", high="green")
+  p <- p + ggtitle(colnames(df)[x])
+  return(p)
+})
+ggsave(file=paste0(outout.folder.name,"Stromal_UMAP_channels", suffix, ".png"), arrangeGrob(grobs = pltChannels, ncol = 4), height = 5.3, width = 6.1)
+```
+
+
+#Block for Cancer Cells analysis
+
+```{r}
+#Reading input
+```
+
+
+##Checking association with year of sample
+
+```{r}
+table.dat$incyear <- as.factor(table.dat$incyear)
+p1 <- ggplot(table.dat, aes(x=incyear, y=log2(ECadherin))) + geom_boxplot()
+p2 <- ggplot(table.dat, aes(x=incyear, y=log2(CK7))) + geom_boxplot()
+p3 <- ggplot(table.dat, aes(x=incyear, y=log2(Vimentin))) + geom_boxplot()
+p4 <- ggplot(table.dat, aes(x=incyear, y=log2(aSMA))) + geom_boxplot()
+grid.arrange(p1,p2,p3,p4, ncol = 2)
+
+```
+
+
+
+
+
+
+
+
+
+##Selecting channels for inspection in UMAPs and correlations
+
+```{r}
+suffix <- "_test_9"
+
+
+table.data  <- log2(table[,interesting.channels[1:6]])
+data.filtered.trim <- z.trimming(table.data)
+table.data <- data.filtered.trim[[1]]
+table.data <- cbind(table.data, table[,interesting.channels[7:length(interesting.channels)]])
+
+densities.by.channels <- channel.densities(table.data)
+ggsave(file=paste0(outout.folder.name,"Stromal_channel_densities", suffix, ".pdf"), arrangeGrob(grobs = densities.by.channels, ncol = 4), height = 16, width = 16)
+
+
+table.data.scaled <- scale(table.data)
+
+n = 50000 #Downsampling for UMAP to this number
+to.sample <- sort(sample(c(1:nrow(table.data)), n))
+
+table.data.scaled.set <- table.data.scaled[to.sample,]
+
+pdf(file= paste0(outout.folder.name,"Stromal_marker-Correlations", suffix, ".pdf"))
+heatmap(cor(table.data.scaled.set), symm = TRUE)
+dev.off()
+
+df =  table.data.scaled.set
+umap_s = uwot::umap(df, n_neighbors = 50, scale=FALSE , spread=2, min_dist = 0.20, n_epochs = 60)
+uplot = data.frame(x = umap_s[,1], y= umap_s[,2])
+pltChannels <- list()
+pltChannels <- lapply(1:ncol(df), function(x){
+  markers <- df[, x]
+  p = ggplot(data=uplot,aes(x,y, color=markers)) + geom_point(size=0.3, stroke=0, alpha=0.7)+
+    #guides(color = guide_legend(override.aes = list(size=5))) +
+    theme_bw() + coord_fixed(ratio=1)+
+    xlab("umap1") + ylab("umap2") + theme(legend.position="none") + theme(aspect.ratio=1) +
+    scale_colour_gradient(low = "#103254", high="green")
+  p <- p + ggtitle(colnames(df)[x])
+  return(p)
+})
+ggsave(file=paste0(outout.folder.name,"Cancer_UMAP_channels", suffix, ".png"), arrangeGrob(grobs = pltChannels, ncol = 4), height = 5.3, width = 6.1)
+```
+
+
+
+#Clustering of cancer cells using FlowSoM
+
+```{r}
+
+
+
+
+```
+
