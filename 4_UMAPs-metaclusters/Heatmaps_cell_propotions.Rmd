@@ -1,0 +1,301 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(corrplot)
+library(RColorBrewer)
+library(reshape2)
+library(ggplot2)
+library(gridExtra)
+library(ggpubr)
+library(CytoTree)
+library(flowCore)
+library(stringr)
+library("dplyr")
+theme_set(theme_pubr())
+library(FlowSOM)
+library(circlize)
+library(ComplexHeatmap)
+
+
+source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/qc_functions.R")
+source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/cell_type_caller_functions.R")
+
+
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/Heatmaps/"
+```
+
+#Reading input dataset
+```{r}
+cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All-cells_clusters.csv",
+                    header = TRUE, sep=",")
+```
+
+#Reading clinical info
+```{r}
+cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.csv", sep=",", header = TRUE)
+
+clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
+
+clin.tcycif$cycif.core.id <- as.numeric(gsub("core","",clin.tcycif$cycif.core.id))
+```
+
+```{r}
+#Merging clinical data with shallowHRD
+shallowHRDresults <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/shallowHRD_summary_table.csv", header=TRUE, sep=",")
+
+colnames(shallowHRDresults)[3] <- "ShallowHRDcall"
+
+IDs <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/sample_names_sWGS.csv", sep=",", header=TRUE)
+
+
+IDs$CF.ID.number <- as.numeric(sub("X","", IDs$CF.ID.number))
+clindata.swgs <- merge(clin.tcycif, IDs, by.x="CFsample", by.y="Description", all.x = TRUE)
+clindata.shrd <- merge(clindata.swgs, shallowHRDresults, by.x="CF.ID.number", by.y="Sample", all.x = TRUE)
+
+
+BRCAsamples <- clindata.shrd[clindata.shrd$BRCA_methylation == "BRCA hypermethylation" | grepl("BRCA", clindata.shrd$BRCA_mutation),"patient"]
+
+CCNE1amp <- clindata.shrd[clindata.shrd$CCNE1_revised == "Amplification", "patient"]
+
+HRDshallow <- clindata.shrd[which(clindata.shrd$ShallowHRDcall == "positive"),"patient"]
+HRPshallow <- clindata.shrd[which(clindata.shrd$ShallowHRDcall == "borderline" | clindata.shrd$ShallowHRDcall == "negative"),"patient"]
+
+BRCAnessPos <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "BRCAness mutation"),"patient"]
+BRCAnessNeg <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "No BRCAness mutation"),"patient"]
+
+
+clindata.shrd$Molecular.profile2 <- rep("Other",  nrow(clindata.shrd))
+
+clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "HRD"
+clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "HRP"
+clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "BRCAness+sHRD-"
+clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "BRCAness-sHRD+"
+
+
+clindata.shrd[which(clindata.shrd$patient %in% CCNE1amp), "Molecular.profile2"] <- "CCNE1amp"
+clindata.shrd[which(clindata.shrd$patient %in% BRCAsamples), "Molecular.profile2"] <- "BRCAmut/met"
+```
+
+####Heatmap for all cells
+
+```{r}
+#Heatmap for all cells
+
+
+cells_percentages <- cells %>% group_by(patient, GlobalCellType) %>% summarise(n = n()) %>% mutate(proportion = n * 100 / sum(n))
+
+cells_percentages <- as.data.frame(cells_percentages)
+cells_percentages <- cells_percentages[,-3]
+
+cells_percentages.m <- cells_percentages %>% pivot_wider(names_from = GlobalCellType, values_from = proportion)
+
+cells_percentages.m <- as.data.frame(cells_percentages.m)
+row.names(cells_percentages.m) <- cells_percentages.m[,1]
+cells_percentages.m <- cells_percentages.m[,-1]
+cells_percentages.m[is.na(cells_percentages.m)] <- 0
+cells_percentages.m <- as.matrix(cells_percentages.m)
+cells_percentages.scaled <- scale(cells_percentages.m)
+
+#Getting molecular profile of patients using same order as matrix
+Profiles.m <- sapply(row.names(cells_percentages.m), function(x) {
+  clindata.shrd[which(clindata.shrd$patient == x)[1],"Molecular.profile2"] })
+Profiles.m <- factor(Profiles.m, levels=c("HRD", "BRCAmut/met","BRCAness-sHRD+","BRCAness+sHRD-","CCNE1amp","HRP","Other"))
+
+#Getting therapy sequence of patients using same order as matrix
+therapy <- sapply(row.names(cells_percentages.m), function(x) {
+  clin.tcycif[which(clin.tcycif$patient == x)[1],"therapy_sequence"] })
+therapy[which(therapy == "PDS followed by NACT")] <- "PDS"
+therapy[which(therapy == "Primairy debulking")] <- "PDS"
+therapy[which(therapy == "Only debulking")] <- "PDS"
+therapy[which(therapy == "NACT followed by re-debulking")] <- "NACT"
+
+colours <- list(Therapy=c("NACT"="black", "PDS"="grey90"),
+                M.profile=c("BRCAmut/met" = "#ff0000", "HRD" = "#960018", "CCNE1amp"="darkblue", "HRP"="#1E90FF", "BRCAness+sHRD-"="pink", "BRCAness-sHRD+"="#e0115f",  "Other"="grey60"))
+
+ha = rowAnnotation(Therapy=therapy, M.profile=Profiles.m, col =colours)
+
+set.seed(123)
+col_c <- colorRamp2(c(-1.5, 0, 2, 4), c("#0000FF","grey95", "#F9AAAA", "#EE0000"))
+hmap1 <- Heatmap(cells_percentages.scaled, name="Subtype %\nper patient (Z-score)",
+                row_names_gp = gpar(fontsize = 2), column_names_gp = gpar(fontsize = 7), row_title = NULL, column_title = NULL,
+                row_names_side = "left", row_dend_side = "right",
+                col=col_c, row_km = 3, column_km = 4,
+                right_annotation = ha, column_names_rot = 60)
+png(paste0(out.folder.name, "All_heatmap.png"), res=300, width=5, height=7, units = "in")
+draw(hmap1)
+dev.off()
+```
+
+#Heatmap for all cells, dividing by therapy
+```{r}
+#Heatmap for all cells, dividing by therapy
+therapies.vals <- c("NACT","PDS")
+for (t in therapies.vals){
+  cells_percentages.sel.scaled <- cells_percentages.scaled[which(therapy == t),]
+
+  ha = rowAnnotation(M.profile=Profiles.m[which(therapy == t)], col=colours)
+  
+  set.seed(321)
+  col_c <- colorRamp2(c(-1.5, 0, 2, 4), c("#0000FF","grey95", "#F9AAAA", "#EE0000"))
+  hmap1 <- Heatmap(cells_percentages.sel.scaled, name="Subtype %\nper patient (Z-score)",
+                  row_names_gp = gpar(fontsize = 3), column_names_gp = gpar(fontsize = 7),
+                  column_title = t, row_title = NULL,
+                  row_names_side = "left", row_dend_side = "right",
+                  col=col_c, row_km = 3, column_km = 3,
+                  right_annotation = ha, column_names_rot = 60)
+  
+  png(paste0(out.folder.name, t, "_heatmap.png"), res=300, width=5, height=7, units = "in")
+  draw(hmap1)
+  dev.off()
+}
+```
+
+
+#Heatmap for cancer and stromal cells, dividing by therapy
+```{r}
+#Heatmap for cancer and stromal cells, dividing by therapy
+set.seed(321)
+cell.types <- c("Stromal","Cancer")
+for (ct in cell.types){
+  
+  cells.selection <- cells[grep(ct, cells$GlobalCellType),]
+  
+  cells_percentages <- cells.selection %>% group_by(patient, GlobalCellType) %>% summarise(n = n()) %>% mutate(proportion = n * 100 / sum(n))
+  cells_percentages <- as.data.frame(cells_percentages)
+  cells_percentages <- cells_percentages[,-3]
+  
+  cells_percentages.m <- cells_percentages %>% pivot_wider(names_from = GlobalCellType, values_from = proportion)
+  
+  cells_percentages.m <- as.data.frame(cells_percentages.m)
+  row.names(cells_percentages.m) <- cells_percentages.m[,1]
+  cells_percentages.m <- cells_percentages.m[,-1]
+  cells_percentages.m[is.na(cells_percentages.m)] <- 0
+  cells_percentages.m <- as.matrix(cells_percentages.m)
+  cells_percentages.scaled <- scale(cells_percentages.m)
+
+  
+  therapies.vals <- c("NACT","PDS")
+  for (t in therapies.vals){
+    cells_percentages.sel.scaled <- cells_percentages.scaled[which(therapy == t),]
+
+    ha = rowAnnotation(M.profile=Profiles.m[which(therapy == t)], col=colours)
+    
+    
+    col_c <- colorRamp2(c(-1.5, 0, 2, 4), c("#0000FF","grey95", "#F9AAAA", "#EE0000"))
+    hmap1 <- Heatmap(cells_percentages.sel.scaled, name="Subtype %\nper patient (Z-score)",
+                    row_names_gp = gpar(fontsize = 3), column_names_gp = gpar(fontsize = 7), column_title = paste0(ct,".cells-",t), row_title = NULL,
+                    row_names_side = "left", row_dend_side = "right",
+                    col=col_c, row_km = 2, column_km = 2,
+                    right_annotation = ha, column_names_rot = 60)
+    
+    png(paste0(out.folder.name, ct,"_", t, "_heatmap.png"), res=300, width=5, height=7, units = "in")
+    draw(hmap1)
+    dev.off()
+  }
+}
+```
+
+
+
+#Heatmap for immune cells, dividing by therapy
+```{r}
+#Heatmap for immune cells, dividing by therapy
+set.seed(321)
+
+cells.selection <- cells[which(!grepl("Stromal", cells$GlobalCellType) & !grepl("Cancer", cells$GlobalCellType)),]
+
+cells_percentages <- cells.selection %>% group_by(patient, GlobalCellType) %>% summarise(n = n()) %>% mutate(proportion = n * 100 / sum(n))
+cells_percentages <- as.data.frame(cells_percentages)
+cells_percentages <- cells_percentages[,-3]
+
+cells_percentages.m <- cells_percentages %>% pivot_wider(names_from = GlobalCellType, values_from = proportion)
+
+cells_percentages.m <- as.data.frame(cells_percentages.m)
+row.names(cells_percentages.m) <- cells_percentages.m[,1]
+cells_percentages.m <- cells_percentages.m[,-1]
+cells_percentages.m[is.na(cells_percentages.m)] <- 0
+cells_percentages.m <- as.matrix(cells_percentages.m)
+
+therapies.vals <- c("NACT","PDS")
+for (t in therapies.vals){
+  cells_percentages.sel <- cells_percentages.m[which(therapy == t),]
+  cells_percentages.sel.scaled <- scale(cells_percentages.sel)
+
+  ha = rowAnnotation(M.profile=Profiles.m[which(therapy == t)], col=colours)
+  
+  
+  col_c <- colorRamp2(c(-1.5, 0, 2, 4), c("#0000FF","grey95", "#F9AAAA", "#EE0000"))
+  hmap1 <- Heatmap(cells_percentages.sel.scaled, name="Subtype %\nper patient (Z-score)",
+                  row_names_gp = gpar(fontsize = 3), column_names_gp = gpar(fontsize = 7), column_title = paste0("Immune.cells-",t), row_title = NULL,
+                  row_names_side = "left", row_dend_side = "right",
+                  col=col_c, row_km = 2, column_km = 2,
+                  right_annotation = ha, column_names_rot = 60)
+  
+  png(paste0(out.folder.name, "Immune_", t, "_heatmap.png"), res=300, width=5, height=7, units = "in")
+  draw(hmap1)
+  dev.off()
+}
+```
+
+
+
+```{r}
+cells$cycif.core.slide <- paste0(cells$cycif.slide,"_core",  cells$cycif.core.id)
+
+```
+
+```{r}
+core.slide.patient <- cells[,c("cycif.core.slide","patient")]
+core.slide.patient <- core.slide.patient %>% distinct()
+core.slide.patient
+```
+
+
+
+#Heatmap for all cells,taking the median by core, or average
+```{r}
+cells_percentages <- cells %>% group_by(cycif.core.slide, GlobalCellType) %>% summarise(n = n()) %>% mutate(proportion = n * 100 / sum(n))
+
+cells_percentages <- as.data.frame(cells_percentages)
+cells_percentages <- cells_percentages[,-3]
+
+cells_percentages.patient <- merge(cells_percentages, core.slide.patient, by="cycif.core.slide")
+
+med.cells.percentages <- cells_percentages.patient %>% group_by(patient, GlobalCellType) %>% summarise(n = n()) %>% mutate(proportion = n * 100 / sum(n))
+
+
+cells_percentages.m <- cells_percentages %>% pivot_wider(names_from = GlobalCellType, values_from = proportion)
+
+cells_percentages.m <- as.data.frame(cells_percentages.m)
+row.names(cells_percentages.m) <- cells_percentages.m[,1]
+cells_percentages.m <- cells_percentages.m[,-1]
+cells_percentages.m[is.na(cells_percentages.m)] <- 0
+cells_percentages.m <- as.matrix(cells_percentages.m)
+cells_percentages.scaled <- scale(cells_percentages.m)
+
+
+#Heatmap for all cells, dividing by therapy
+therapies.vals <- c("NACT","PDS")
+for (t in therapies.vals){
+  cells_percentages.sel.scaled <- cells_percentages.scaled[which(therapy == t),]
+
+  ha = rowAnnotation(M.profile=Profiles.m[which(therapy == t)], col=colours)
+  
+  set.seed(321)
+  col_c <- colorRamp2(c(-1.5, 0, 2, 4), c("#0000FF","grey95", "#F9AAAA", "#EE0000"))
+  hmap1 <- Heatmap(cells_percentages.sel.scaled, name="Subtype %\nper patient (Z-score)",
+                  row_names_gp = gpar(fontsize = 3), column_names_gp = gpar(fontsize = 7),
+                  column_title = t, row_title = NULL,
+                  row_names_side = "left", row_dend_side = "right",
+                  col=col_c, row_km = 3, column_km = 3,
+                  right_annotation = ha, column_names_rot = 60)
+  
+  png(paste0(out.folder.name, t, "_heatmap.png"), res=300, width=5, height=7, units = "in")
+  draw(hmap1)
+  dev.off()
+}
+```
