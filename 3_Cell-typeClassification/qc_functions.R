@@ -96,11 +96,13 @@ xy_plot <- function(df, sample.name, extendImmunes =T){
 # TODO this can be made computationally more efficient, if combined with compare compositions etc as they loop over all the samples
 # For the gates it can be used several of them in combination, example: gates=c(global.gates,immune.gates)
 #Options for scaling = z.score, mad, min.max, none
-index_plots = function(new, old, gates.input=global.gates, scaling="z.score") {
+
+index_plots = function(new, old, gates.input=global.gates, scaling="z.score", log2.transform=FALSE, GlobalCellType= "GlobalCellType") {
   # Firstly combine the sample data to a single data frame containing only columns of interest
   # TODO in the current version of cell type caller, the result might already be in a single df making this step redundant
   ###
   
+  cell.type.column=GlobalCellType
   
   cols_to_keep = marker.in.gates(colnames(new), gates.to.use=gates.input)
   #cols_to_keep[c(1,which(colnames(new)==GlobalCellType))] = T
@@ -112,10 +114,15 @@ index_plots = function(new, old, gates.input=global.gates, scaling="z.score") {
   cols_to_keep[which(colnames(new)==GlobalCellType)] = T
   df.old = old[,cols_to_keep]
   
+  if (log2.transform){
+    df.new[,-ncol(df.new)] <- log2(df.new[,-ncol(df.new)])
+    df.old[,-ncol(df.old)] <- log2(df.old[,-ncol(df.old)])
+  }
+  
   #scaling data
   if (scaling == "z.score"){
-      df.new[,-ncol(df.new)] = BBmisc::normalize(scale(df.new[,-ncol(df.new)]), method='range')
-      df.old[,-ncol(df.old)] = BBmisc::normalize(scale(df.old[,-ncol(df.old)]), method='range') #scaling data
+      df.new[,-ncol(df.new)] = scale(df.new[,-ncol(df.new)])
+      df.old[,-ncol(df.old)] = scale(df.old[,-ncol(df.old)]) #scaling data
   } else if (scaling == "mad"){
       mads.new <- sapply(df.new[,-ncol(df.new)], mad)
       mads.old <- sapply(df.new[,-ncol(df.new)], mad)
@@ -140,9 +147,10 @@ index_plots = function(new, old, gates.input=global.gates, scaling="z.score") {
   ###
   
   # Marker index
-  means.by.cell.type = data.temp %>% group_by(GlobalCellType,iter) %>% summarise(across(where(is.numeric),.fns = median))#[1:(ncol(data.temp)-3)],.funs = mean)
-  sds.by.cell.type = data.temp %>% group_by(GlobalCellType,iter) %>% summarise(across(where(is.numeric),.fns = sd))
-  plot.data = melt(means.by.cell.type, id.vars = c(cell.type.column,'iter')) #Value column is the mean
+  groupbars <- c(GlobalCellType, "iter")
+  means.by.cell.type = data.temp %>% group_by_at(groupbars) %>% summarise(across(where(is.numeric),.fns = mean))#[1:(ncol(data.temp)-3)],.funs = mean)
+  sds.by.cell.type = data.temp %>% group_by_at(groupbars) %>% summarise(across(where(is.numeric),.fns = sd))
+  plot.data = reshape2::melt(means.by.cell.type, id.vars = c(cell.type.column,'iter')) #Value column is the mean
   plot.data$pairs = NA
   ind = !(plot.data[,cell.type.column] %in% appeared.or.disappeared.types)
   plot.data$pairs[ind] = rep(1:(sum(ind)/2),each=2)
@@ -162,46 +170,57 @@ index_plots = function(new, old, gates.input=global.gates, scaling="z.score") {
     }else {
       print(paste0(cell.type, " not found in input gates"))
     }
-    tmp.gates = unlist(gates[grep(cell.type,names(gates))])
-    if(is.null(tmp.gates)) {
-      warning(paste0('No gates for cell type ',cell.type))
-      next
+    if(exists("gates")){
+      tmp.gates = unlist(gates[grep(cell.type,names(gates))])
+      if(is.null(tmp.gates)) {
+        warning(paste0('No gates for cell type ',cell.type))
+        next
+      }
+      pos = unique(tmp.gates[grep('Pos', names(tmp.gates))])
+      neg = unique(tmp.gates[grep('Neg', names(tmp.gates))])
+      neg = neg[which(neg%in%colnames(means.by.cell.type))]
+      pos = pos[which(pos%in%colnames(means.by.cell.type))]
+      
+      #make a backup
+      meansct = means.by.cell.type
+      means.by.cell.type[do.call(cbind,lapply(means.by.cell.type, is.infinite))] <- 0 #Replace infinities with 0 (not ideal)
+      
+      ##
+      # TODO come up with a better statistic; probably scaling the input data
+      # ver.1 sum of positive markers - sum of negative markers
+      # ver.2 average of positive markers - average of negative markers
+      ##
+      #Adding if for cell-types without negative or positive markers
+      if (length(neg) > 0 & length(pos) > 0){ 
+        gate.index = sum(means.by.cell.type[i,pos])/length(pos)-sum(means.by.cell.type[i,neg])/length(neg)
+      }else{
+        if (length(neg) > 0){
+          gate.index = sum(means.by.cell.type[i,neg])/length(neg)
+        }
+        if(length(pos) > 0){
+          gate.index = sum(means.by.cell.type[i,pos])/length(pos)
+        }
+      }
+      means.by.cell.type = meansct
+      gi = rbind(gi, data.frame(index=gate.index, cell.type=cell.type, iter = means.by.cell.type$iter[i]))
     }
-    pos = unique(tmp.gates[grep('Pos', names(tmp.gates))])
-    neg = unique(tmp.gates[grep('Neg', names(tmp.gates))])
-    neg = neg[which(neg%in%colnames(means.by.cell.type))]
-    pos = pos[which(pos%in%colnames(means.by.cell.type))]
-    
-    #make a backup
-    meansct = means.by.cell.type
-    means.by.cell.type[do.call(cbind,lapply(means.by.cell.type, is.infinite))] <- 0 #Replace infinities with 0 (not ideal)
-    
-    ##
-    # TODO come up with a better statistic; probably scaling the input data
-    # ver.1 sum of positive markers - sum of negative markers
-    # ver.2 average of positive markers - average of negative markers
-    ##
-    if (length(neg)){ #Adding if for cell-types without negative markers
-      gate.index = sum(means.by.cell.type[i,pos])/length(pos)-sum(means.by.cell.type[i,neg])/length(neg)
-    }else{
-      gate.index = sum(means.by.cell.type[i,pos])/length(pos)
-    }
-    
-    means.by.cell.type = meansct
-    gi = rbind(gi, data.frame(index=gate.index, cell.type=cell.type, iter = means.by.cell.type$iter[i]))
   }
-  gi$pairs = rep(1:(nrow(gi)/2),each=2)
-  linecol2 = gi %>% group_by(pairs) %>%summarise_at(.vars="index",.funs = function(x){ifelse(sum(x*c(1,-1))>0,'new','old')})
-  linecol2 = rep(linecol2$index, each=2)
-  pgi = ggplot(data = gi, aes(x=cell.type,y=index,color=iter)) + geom_point() + theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 5)) + geom_line(aes(group=pairs,color=linecol2))
+  if (nrow(gi)){
+    gi$pairs = rep(1:(nrow(gi)/2),each=2)
+    linecol2 = gi %>% group_by(pairs) %>%summarise_at(.vars="index",.funs = function(x){ifelse(sum(x*c(1,-1))>0,'new','old')})
+    linecol2 = rep(linecol2$index, each=2)
+    pgi = ggplot(data = gi, aes(x=cell.type,y=index,color=iter)) + geom_point() + theme(axis.text.x = element_text(angle = 45, hjust = 1,size = 5)) + geom_line(aes(group=pairs,color=linecol2))
+  }else{
+    pgi <- NULL
+  }
   plots = list(p,pgi)
   
   # Heatmaps
   for(fiter in c("new", "old")) {
-    hmap.subset = data.frame(filter(means.by.cell.type,iter==fiter)[,-2])
-    sd.subset = data.frame(filter(sds.by.cell.type,iter==fiter)[,-2])
+    hmap.subset = as.data.frame(means.by.cell.type[means.by.cell.type$iter == fiter,])[-2]
+    sd.subset = as.data.frame(sds.by.cell.type[sds.by.cell.type$iter == fiter,])[-2]
     row.names(hmap.subset) = hmap.subset[,cell.type.column]
-    row_ha = rowAnnotation(N.cells=anno_barplot(as.vector(table(pull(filter(data.temp,iter==fiter),cell.type.column)))))
+    row_ha = rowAnnotation(N.cells=anno_barplot(as.vector(table(pull(data.temp[data.temp$iter == fiter,],cell.type.column)))))
     ph = plot.heatmap(hmap.subset[,-1],sd.subset[,-1],row_anno=row_ha)
     plots = append(plots,ph)
   }
@@ -223,9 +242,9 @@ heatmap_plot = function(new, old){
 plot.heatmap <- function(data, sds, scalem="none", title=NULL,colors=NULL, row_anno) {
   mat2 = as.matrix(data)
   return(Heatmap(mat2, column_title  = "Numerical values inside cells represents the standard deviation", column_title_side="bottom",
-           column_title_gp = gpar(fontsize = 8), cluster_rows=T, border = T,name='Scale', width = ncol(mat2)*unit(7, "mm"), height = nrow(mat2)*unit(7, "mm"),
+           column_title_gp = gpar(fontsize = 7), cluster_rows=T, border = T,name='Scale', width = ncol(mat2)*unit(7, "mm"), height = nrow(mat2)*unit(7, "mm"),
            color=colorRampPalette(c("#0e74b3","white","#cf242a"),interpolate="linear")(200), right_annotation=row_anno,
-           column_names_rot = 45,row_names_gp = gpar(fontsize = 8),column_names_gp = gpar(fontsize = 8),heatmap_legend_param = list(direction = "horizontal"),
+           column_names_rot = 45,row_names_gp = gpar(fontsize = 12),column_names_gp = gpar(fontsize = 12),heatmap_legend_param = list(direction = "horizontal"),
            cell_fun = function(j, i, x, y, width, height, fill) {
              grid.text(sprintf("%.2g", sds[i, j]), x, y, rot=45, gp = gpar(fontsize = 6))
            }))
@@ -317,14 +336,15 @@ density.two.channels.by.class <- function(data, label="Cancer", channel1="CK7", 
 #####UMAPs with intensity by channels and colored by cell type
 #column.names.for.umap the columns in df used for the UMAP
 #cell.labels the cell labels (one label per row)
-channel.UMAPs <- function(df, cell.labels, sub.sample=FALSE, n.sampling=10000){
+channel.UMAPs <- function(df, cell.labels, sub.sample=FALSE, n.sampling=10000,
+                          user.colors=mycolors, umap_neighbors=30, umap_mindist=0.30){
   if (sub.sample){
     sampling.rows <- sample(1:nrow(df), n.sampling)
     df <- df[sampling.rows,]
     cell.labels <- cell.labels[sampling.rows]
   }
   
-  umap_s = uwot::umap(df, n_neighbors = 50, scale=T , spread=1.5, min_dist = 0.10, n_epochs = 60)
+  umap_s = uwot::umap(df, n_neighbors = umap_neighbors, scale=FALSE, spread=1.5, min_dist = umap_mindist, n_epochs = 60)
   
   uplot = data.frame(x = umap_s[,1], y= umap_s[,2])
   pltChannels <- list()
@@ -342,16 +362,14 @@ channel.UMAPs <- function(df, cell.labels, sub.sample=FALSE, n.sampling=10000){
   Subtype <- factor(cell.labels, levels=unique(cell.labels))
   df <- cbind(df$Subtype)
   
-  mycolors <- colorRampPalette(brewer.pal(10, "Paired"))(10)
-  
   pl = ggplot(uplot,aes(x,y, color=Subtype))+ geom_point(size=0.4, stroke=0, alpha=0.7)+ 
     geom_density_2d(color="grey60", alpha=0.6) +
     scale_fill_viridis(discrete = TRUE) + 
-    guides(color = guide_legend(override.aes = list(size=5))) + 
-    scale_color_manual(values=mycolors) + theme_bw() + coord_fixed(ratio=1)+
-    guides(colour = guide_legend(override.aes = list(size=5, shape=15, alpha=1), direction="horizontal", ncol=1, label.position="bottom", byrow=F)) + 
+    guides(color = guide_legend(override.aes = list(size=10))) + 
+    scale_color_manual(values=user.colors) + theme_bw() + coord_fixed(ratio=1)+
+    guides(colour = guide_legend(override.aes = list(size=10, shape=15, alpha=1), direction="horizontal", ncol=2, label.position="bottom", byrow=F)) + 
     xlab("umap1") + ylab("umap2") + #ylim(-10, 10) + 
-    theme(legend.title = element_blank(), aspect.ratio=1)
+    theme(legend.title = element_blank(), aspect.ratio=1.1)
   
   plots = list(pltChannels,pl)
   return(plots)

@@ -1,13 +1,13 @@
-ls % Crop TMA ome.tif into the already detected cores
+% Crop TMA ome.tif into the already detected cores
 % Quantify with already computed masks.
 % /casado
 
 basePath = 'D:\users\fperez\NKI_TMAs_AF\';
-maskPath = 'Nuc-segment'; %Input folder name
-maskFileName = '_Probabilities_MaskNuc.tiff';
+maskPath = 'whole-cell-segmentation2'; %Input folder name
+maskFileName = '_Probabilities_cytomask2.tiff';
 omePath = 'registration';
 omeSuffix = '.ome.tif';
-outputsubfolder = 'quantification_nuc';
+outputsubfolder = 'quantification2';
 cropCoordsPath = 'dearray\cropCoords\';
 cropCoordsFileName = '*_cropCoords.mat';
 
@@ -30,10 +30,11 @@ XYnames = {'X_position','Y_position'};
 % List of samples
 sampleList = dir( [ basePath 'TMA*' ] );
 
-selected = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+%selected = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+selected = 10;
 
-parfor sample = 1:length(selected)
-%for sample = 2
+%parfor sample = 1:length(selected)
+for sample = 1
     samp = selected(sample);
     sampleName = sampleList(samp).name;
     disp(sampleName)

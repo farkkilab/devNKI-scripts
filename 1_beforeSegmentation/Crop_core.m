@@ -4,7 +4,7 @@
 
 basePath = 'D:\users\fperez\NKI_TMAs_AF\';
 destPath='D:\users\fperez\NKI_TMAs_AF';
-outputfolder='selected_Channels';
+outputfolder='Channels_all';
 omePath = 'registration';
 omeSuffix = '.ome.tif';
 cropCoordsPath = 'dearray';
@@ -14,7 +14,10 @@ cropCoordsFileName = '*_cropCoords.mat';
 channelNames = readtable( [basePath filesep 'channel_list.csv'], 'ReadVariableNames', false);
 
 %Selection of chanels
-chanelSelected= [1,2,3,4,6,10,12,14,15,16,22,38,39,40,42,43,44,46,47,48];
+%chanelSelected= [1,2,3,4,6,10,12,14,15,16,22,38,39,40,42,43,44,46,47,48];
+chanelSelected = 1:48;
+
+coresSelected = 10:25;
 
 %Extra DNA channels
 %DNAs=5:4:41;
@@ -27,12 +30,11 @@ numChannelNames = length(chanelSelected); % this is only to allocate memory befo
 
 %chanelSelected = 1;
 
-%Select random sample
+%Select all samples
 sampleList = dir( [ basePath 'TMA*' ] );
 
 
 for sample = 1:length(sampleList)
-%for sample = 1
         %Number of crop files
         sampleName = sampleList(sample).name;
         disp(sampleName)
@@ -43,11 +45,8 @@ for sample = 1:length(sampleList)
         cropCoordsFiles = dir( [ basePath filesep sampleName filesep cropCoordsPath filesep cropCoordsFileName ] );
 
 
-        for coreCoords = 1:length(cropCoordsFiles)
-
-            %Get cores, crop them from big TIFF
-            cropCoordsFiles = dir( [ basePath filesep sampleName filesep cropCoordsPath filesep cropCoordsFileName ] );
-
+        %for coreCoords = 1:length(cropCoordsFiles)
+        for coreCoords = coresSelected
             coresFolder = [ destPath filesep sampleName filesep cropCoordsPath filesep outputfolder];
             mkdir(coresFolder);
 
@@ -56,7 +55,7 @@ for sample = 1:length(sampleList)
             iCore = splitName{1};
             fprintf('Sample: %s - core %s Started', sampleName, iCore);
 
-            croppingdata = load( [ cropCoordsFiles(coreCoords).folder filesep coreCoordsName ] );
+            croppingdata = load( [ basePath filesep sampleName filesep cropCoordsPath filesep coreCoordsName ] );
             rect = croppingdata.rect;
             boundingBox = [rect(1:2), rect(3:4) - rect(1:2)];
             core = zeros(boundingBox(4), boundingBox(3), numChannelNames);
