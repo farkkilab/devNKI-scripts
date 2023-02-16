@@ -337,14 +337,17 @@ density.two.channels.by.class <- function(data, label="Cancer", channel1="CK7", 
 #column.names.for.umap the columns in df used for the UMAP
 #cell.labels the cell labels (one label per row)
 channel.UMAPs <- function(df, cell.labels, sub.sample=FALSE, n.sampling=10000,
-                          user.colors=mycolors, umap_neighbors=30, umap_mindist=0.30){
+                          umap_neighbors=30, umap_mindist=0.30){
   if (sub.sample){
     sampling.rows <- sample(1:nrow(df), n.sampling)
     df <- df[sampling.rows,]
     cell.labels <- cell.labels[sampling.rows]
   }
   
-  umap_s = uwot::umap(df, n_neighbors = umap_neighbors, scale=FALSE, spread=1.5, min_dist = umap_mindist, n_epochs = 60)
+  umap_s = uwot::umap(df, n_neighbors = umap_neighbors, scale="colrange", spread=1.5, min_dist = umap_mindist, n_epochs = 60)
+  
+  ntypes <- length(unique(cell.labels))
+  mycolors <- colorRampPalette(brewer.pal(8, "Set2"))(ntypes)
   
   uplot = data.frame(x = umap_s[,1], y= umap_s[,2])
   pltChannels <- list()
@@ -366,7 +369,7 @@ channel.UMAPs <- function(df, cell.labels, sub.sample=FALSE, n.sampling=10000,
     geom_density_2d(color="grey60", alpha=0.6) +
     scale_fill_viridis(discrete = TRUE) + 
     guides(color = guide_legend(override.aes = list(size=10))) + 
-    scale_color_manual(values=user.colors) + theme_bw() + coord_fixed(ratio=1)+
+    scale_color_manual(values=mycolors) + theme_bw() + coord_fixed(ratio=1)+
     guides(colour = guide_legend(override.aes = list(size=10, shape=15, alpha=1), direction="horizontal", ncol=2, label.position="bottom", byrow=F)) + 
     xlab("umap1") + ylab("umap2") + #ylim(-10, 10) + 
     theme(legend.title = element_blank(), aspect.ratio=1.1)
@@ -401,4 +404,35 @@ channel.densities <- function(df){
     return(p)
   })
   return(pltChannels)
+}
+
+
+norm.by.slide.fun <- function(df, slide.name.column="cycif.slide", normalization="z.score", channels.interest=NULL){
+  df[,channels.interest] <- log2(df[,channels.interest])
+  slides <- unique(df[,slide.name.column])
+  print(paste("Normalizing for the next slides:", slides))
+  #Trimming outliers and z-score scaling slide by slide
+  norm.by.slide <- lapply(slides, function(x){
+    dat <- df[which(df[,slide.name.column] == x),channels.interest]
+    #Trimming data to the 0.99 and 0.01 percentile
+    for (i in 1:ncol(dat)){
+      quantile.99 <- quantile(dat[,i], 0.99)
+      quantile.01 <- quantile(dat[,i], 0.01)
+      dat[,i][which(dat[,i] >= quantile.99)] = quantile.99
+      dat[,i][which(dat[,i] <= quantile.01)] = quantile.01
+    }
+    #Z-score scaling
+    scaled.dat <- scale(as.matrix(dat))
+    if (normalization=="min.max"){
+      #Min.max scaling
+      scaled.dat <- apply(scaled.dat, 2, min_max_norm)
+    }
+    return(scaled.dat)
+  })
+  
+  #Updating scaling in aux.data
+  for (c in 1:length(norm.by.slide)){
+    df[which(df[,slide.name.column]==slides[c]),channels.interest] = as.data.frame(norm.by.slide[[c]])
+  }
+  return(df)
 }
