@@ -2,5 +2,7 @@
 
 ## Description
 
-NOTES to be added by Aleksandra
+Files:
+
+- process_data.py contains required functions for establishing, pre-processing and visualising the dataset; 
 
