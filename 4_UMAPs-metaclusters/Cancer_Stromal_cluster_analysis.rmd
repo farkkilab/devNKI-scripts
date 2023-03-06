@@ -24,8 +24,10 @@ library(ComplexHeatmap)
 source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/qc_functions.R")
 source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/cell_type_caller_functions.R")
 
-
-outout.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Cell_class_analysis/"
+project.path <- "D:/users/fperez/NKI_TMAs_AF/"
+outout.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_Zscore2/"
+tribus.subfolder <- "Tribus_Cell-segment_202304"
+celltypes.file.suffix = "_cellTypes.csv"
 ```
 #Reading clinical info
 
@@ -33,49 +35,50 @@ outout.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Cell_class_analysis/"
 cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
 clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.csv", sep=",", header = TRUE)
 
+clin.columns.interest <- c("TnumberAVL","CFsample","centre","incyear","figo_stage",
+                           "Molecular_profile","therapy_sequence")
+
+clinical.info <- clinical.info[,clin.columns.interest]
+
 clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
-
-clin.tcycif$cycif.core.id <- as.numeric(gsub("core","",clin.tcycif$cycif.core.id))
-```
-
-#Reading whole dataset
-```{r}
-whole.dataset <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_slides_cellTypes.csv", sep=",", header = TRUE)
-
-dataset <- whole.dataset[whole.dataset$GlobalCellType != "LowDapi",]
-
-slidenames <- sapply(dataset$Row_number, function(x){
-  splitted <- strsplit(x, "_")[[1]]
-  paste(splitted[1],splitted[2],splitted[3], sep="_")
-  })
-
-dataset$Slide <- slidenames
-
-dat.immune <- dataset[dataset$GlobalCellType != "Cancer" & 
-                        !grepl("Stromal", dataset$GlobalCellType),]
-dat.cancer <- dataset[dataset$GlobalCellType == "Cancer",]
-dat.stromal <- dataset[grepl("Stromal", dataset$GlobalCellType),]
 ```
 
 
 
-#Preparing input data
+#Reading input tCycif data and cell.type data
 ```{r}
-t.cancer <- dat.cancer
-t.stromal <- dat.stromal
+#List all the tables with celltype labels
+big.data.set <- NULL
+files <- list.files(path=project.path, pattern = "TMA_", full.names = T)
+#Read all cell.type and signal intensity data
+for (f in files){
+  cycif.slide <- basename(f)
+  slide.data <- read.table(file=paste0(f, "/", tribus.subfolder, "/", cycif.slide, celltypes.file.suffix), sep=",", header=TRUE)
+  slide.data <- cbind(cycif.slide, slide.data)
+  slide.data$Row_number <- paste0(cycif.slide,":",slide.data$Row_number)
+  colnames(slide.data)[colnames(slide.data) == "CoreId"] <- "cycif.core.id"
+  slide.data$cycif.core.id <- paste0("core",slide.data$cycif.core.id)
+  big.data.set <- rbind(big.data.set,slide.data)
+}
 ```
 
+
+#QC and filtering of the cell.type dataset
 ```{r}
-colnames(t.cancer)[ncol(t.cancer)] <- colnames(clin.tcycif)[2]
-colnames(t.cancer)[2] <- colnames(clin.tcycif)[3]
-cancer.dat <- merge(t.cancer, clin.tcycif, by = c("cycif.slide", "cycif.core.id")) 
+#Performing QC according to cell.types
+#Ignoring cell with low DAPI intensity and out of the core
+big.data.set <- big.data.set %>% dplyr::filter(GlobalCellType != "LowDapi")
 
-colnames(t.stromal)[ncol(t.stromal)] <- colnames(clin.tcycif)[2]
-colnames(t.stromal)[2] <- colnames(clin.tcycif)[3]
-stromal.dat <- merge(t.stromal, clin.tcycif, by = c("cycif.slide", "cycif.core.id")) 
+#Ignoring non-useful columns
+#big.data.set <- big.data.set %>% select(-out_of_core, -lost, -Inside_ROI)
 
-#rm(t.stromal)
-#rm(t.cancer)
+
+dat.immune <- big.data.set %>%
+                  dplyr::filter(GlobalCellType != "Cancer",
+                                GlobalCellType != "Stromal",
+                                GlobalCellType != "Others")
+dat.cancer <- big.data.set %>% dplyr::filter(GlobalCellType == "Cancer")
+dat.stromal <- big.data.set[grep("Stromal", big.data.set$GlobalCellType),]
 ```
 
 
@@ -83,19 +86,26 @@ stromal.dat <- merge(t.stromal, clin.tcycif, by = c("cycif.slide", "cycif.core.i
 #Functions to be used for the metaclustering of cancer and stromal cells
 
 #Function to scale the dataset
-scale.dataset <- function(dataset, channels, last.antibody.channel=11, norm.by=NA){
+scale.dataset <- function(dataset, channels, last.antibody.channel=11, norm.by=NA, min.max=TRUE){
   if (!is.na(norm.by)){
     table.scaled <- NULL
     for (i in unique(dataset[,norm.by])){
       data.subset <- dataset[dataset[,norm.by] %in% i,channels]
       #Log2 for antibody intensity channels
       table.dat  <- log2(data.subset[,1:last.antibody.channel]) 
+      #Truncating intensity data to 0.99 percentile only the channels
+      trimmed.list <- z.trimming(table.dat, max.quantile=0.99, min.quantile=0.001) 
+      table.dat.trim <- trimmed.list[[1]]
+      #Truncating morphology data to 0.999
+      morphology.dat <- data.subset[,(last.antibody.channel+1):length(channels)]
+      trimmed.list <- z.trimming(morphology.dat, max.quantile=0.999) 
+      morphology.dat.trim <- trimmed.list[[1]]
       #Rest of the columns correspond to morphology features, not log2 for them
-      table.cat = cbind(table.dat, data.subset[,(last.antibody.channel+1):length(channels)]) 
-      data.filtered.trim <- z.trimming(table.cat) #Truncating data to 0.999 percentile
-      mat.dat <- data.filtered.trim[[1]]
+      mat.dat = cbind(table.dat.trim, morphology.dat.trim) 
       table.scaled.set <- scale(mat.dat) #Z-score normalization
-      table.scaled.set <- apply(table.scaled.set,2,min_max_norm) #Min.Max normalization
+      if(min.max){
+        table.scaled.set <- apply(table.scaled.set,2,min_max_norm) #Min.Max normalization
+      }
       table.scaled <- rbind(table.scaled, table.scaled.set)
     }
   }else{
@@ -105,20 +115,22 @@ scale.dataset <- function(dataset, channels, last.antibody.channel=11, norm.by=N
     data.filtered.trim <- z.trimming(table)
     mat.dat <- data.filtered.trim[[1]]
     table.scaled <- scale(mat.dat)
-    table.scaled <- apply(table.scaled,2,min_max_norm) #Min.Max normalization
+    if(min.max){
+      table.scaled <- apply(table.scaled,2,min_max_norm) #Min.Max normalization
+    }
   }
   return(table.scaled)
 }
 
 #Running FloWSOM and 
-som.metaclustering <- function(dataset, kval=10, tempdir){
+som.metaclustering.consensus <- function(dataset, kval=10, tempdir){
 out.som <- FlowSOM::ReadInput(dataset, transform = FALSE, scale = FALSE)
 out.som <- FlowSOM::BuildSOM(out.som, colsToUse = colnames(dataset), silent=T, xdim=80, ydim=80)
 out.som <- FlowSOM::BuildMST(out.som, silent=T)
 out.results <- suppressMessages(ConsensusClusterPlus::ConsensusClusterPlus(t(out.som$map$codes),
         maxK = 15, reps = 300, pItem = 0.9, pFeature = 1, title = tempdir, 
         plot = "png", verbose = FALSE, clusterAlg = "hc", 
-        distance = "euclidean", seed = NULL))
+        distance = "euclidean", seed = 10))
 metaclusters <- out.results[[kval]]$consensusClass
 return(metaclusters[out.som$map$mapping[,1]])
 }
@@ -130,26 +142,30 @@ return(metaclusters[out.som$map$mapping[,1]])
 
 #Channels used for the metaclustering
 interesting.channels.stromal <- c("pTBK1","Ki67","Vimentin", "pSTAT1", "MHCI",
-                      "ECadherin","aSMA","CD31","Area","Eccentricity","Roundness")
+                      "ECadherin","aSMA","CD31","PDL1_488","Area","Eccentricity","Roundness")
 
-interesting.channels.cancer <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin",
-                          "CK7","Area","Eccentricity", "Roundness")
+interesting.channels.cancer <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin","yH2AX",
+                                 "pTBK1", "cPARP1", "CK7","PDL1_488","Area",
+                                 "Eccentricity", "Roundness")
 
 
 #Scaling datasets
-mat.stromal <- scale.dataset(stromal.dat, interesting.channels.stromal,
-                             last.antibody.channel = 8, norm.by = "cycif.slide")
-
-mat.cancer <- scale.dataset(cancer.dat, interesting.channels.cancer,
-                             last.antibody.channel = 6, norm.by = "cycif.slide")
+mat.stromal <- scale.dataset(dat.stromal, interesting.channels.stromal,
+                             last.antibody.channel = 9, norm.by = "cycif.slide")
+  
+mat.cancer <- scale.dataset(dat.cancer, interesting.channels.cancer,
+                             last.antibody.channel = 10, norm.by = "cycif.slide")
 
 #Directories where to store the consensus clustering plots of the SOM nodes
 tmpdir.cancer <- "D:/users/fperez/NKI_TMAs_AF/Cell_class_analysis/SOM_consensusClusters_cancer_Slide-scaled3/"
 tmpdir.stromal <- "D:/users/fperez/NKI_TMAs_AF/Cell_class_analysis/SOM_consensusClusters_stromal_Slide-scaled3/"
 
-metalabels.cancer <- som.metaclustering(mat.cancer, kval = 8, tmpdir.cancer)
+metalabels.cancer <- som.metaclustering.consensus(mat.cancer, kval = 8,
+                                                  tmpdir.cancer)
+metalabels.stromal <- som.metaclustering.consensus(mat.stromal, kval = 8,
+                                                   tmpdir.stromal)
 
-metalabels.stromal <- som.metaclustering(mat.stromal, kval = 8, tmpdir.stromal)
+
 
 ```
 
@@ -158,7 +174,8 @@ metalabels.stromal <- som.metaclustering(mat.stromal, kval = 8, tmpdir.stromal)
 ```{r}
 #A big function to plot UMAPs, downscaling dataset
 #Extralabels should be a list of vectors
-channel.UMAPs <- function(df, cell.labels, extralabels=NULL, rowselectionstatus=NULL, sub.sample=FALSE,
+channel.UMAPs <- function(df, cell.labels, extralabels=NULL, rowselectionstatus=NULL,
+                          sub.sample=FALSE,
                           n.sampling=10000, user.colors=mycolors, umap_neighbors=30, umap_mindist=0.30){
   if (!is.null(rowselectionstatus)){
     df <- df[rowselectionstatus,]
@@ -175,7 +192,8 @@ channel.UMAPs <- function(df, cell.labels, extralabels=NULL, rowselectionstatus=
     }
   }
   
-  umap_s = uwot::umap(df, n_neighbors = umap_neighbors, scale=FALSE, spread=1.5, min_dist = umap_mindist, n_epochs = 60)
+  umap_s = uwot::umap(df, n_neighbors = umap_neighbors, scale=FALSE, spread=1.5,
+                      min_dist = umap_mindist, n_epochs = 60)
   
   uplot = data.frame(x = umap_s[,1], y= umap_s[,2])
   pltChannels <- list()
@@ -229,74 +247,131 @@ channel.UMAPs <- function(df, cell.labels, extralabels=NULL, rowselectionstatus=
 
 #Exploring metaclusters
 ```{r}
-mat.cancer2  <- as.data.frame(mat.cancer)
+dir.create(outout.folder.name)
+
+#Scaling datasets
 Metacluster.ID <- paste0("Cluster",metalabels.cancer)
-mat.cancer2 <- cbind(mat.cancer2, Metacluster.ID)
+mat.cancer2 <- cbind(dat.cancer, Metacluster.ID)
 
-mat.stromal2  <- as.data.frame(mat.stromal)
 Metacluster.ID <- paste0("Cluster",metalabels.stromal)
-mat.stromal2 <- cbind(mat.stromal2, Metacluster.ID)
+mat.stromal2 <- cbind(dat.stromal, Metacluster.ID)
 
+dat.cancer.clin2 <- merge(mat.cancer2, clin.tcycif, by = c("cycif.slide", "cycif.core.id")) 
+dat.stromal.clin2 <- merge(mat.stromal2, clin.tcycif, by = c("cycif.slide", "cycif.core.id")) 
+
+#For Min.Max normalization
+mat.stromal2 <- scale.dataset(dat.stromal.clin2, interesting.channels.stromal,
+                             last.antibody.channel = 9, norm.by = "cycif.slide")
+
+mat.cancer2 <- scale.dataset(dat.cancer.clin2, interesting.channels.cancer,
+                             last.antibody.channel = 10, norm.by = "cycif.slide")
+
+mat.stromal2 <- as.data.frame(mat.stromal2)
+mat.cancer2 <- as.data.frame(mat.cancer2)
+
+mat.cancer2$Metacluster.ID <- dat.cancer.clin2$Metacluster.ID
+mat.stromal2$Metacluster.ID <- dat.stromal.clin2$Metacluster.ID
 
 #Generating heatmaps of marker expression by cell.type
 ind.plots.cancer = index_plots(mat.cancer2, mat.cancer2,
                         gates.input=list(Pos=interesting.channels.cancer),
-                        scaling = "z.score", log2.transform = FALSE,
+                        scaling = "NONE", log2.transform = FALSE,
                         GlobalCellType = "Metacluster.ID")
 
 ind.plots.stromal = index_plots(mat.stromal2, mat.stromal2,
                         gates.input=list(Pos=interesting.channels.stromal),
-                        scaling = "z.score", log2.transform = FALSE,
+                        scaling = "NONE", log2.transform = FALSE,
                         GlobalCellType = "Metacluster.ID")
 
 #Saving heatmaps
-pdf(file= paste0(outout.folder.name,"Metaclusters_Cancer_Heatmap_Slide-scaled2.pdf"), height = 8, width = 10)
+pdf(file= paste0(outout.folder.name,"/Metaclusters_Cancer_Heatmap_Slide-scaled20230221.pdf"), height = 8, width = 10)
 print(ind.plots.cancer[[3]])
 dev.off()
 
 #Saving heatmaps
-pdf(file= paste0(outout.folder.name,"Metaclusters_Stromal_Heatmap_Slide-scaled2.pdf"), height = 8, width = 10)
+pdf(file= paste0(outout.folder.name,"/Metaclusters_Stromal_Heatmap_Slide-scaled20230221.pdf"), height = 8, width = 10)
 print(ind.plots.stromal[[3]])
 dev.off()
 
+#Only for Z-score normalization
+mat.stromal3 <- scale.dataset(dat.stromal.clin2, interesting.channels.stromal,
+                             last.antibody.channel = 9, norm.by = "cycif.slide")
+
+mat.cancer3 <- scale.dataset(dat.cancer.clin2, interesting.channels.cancer,
+                             last.antibody.channel = 10, norm.by = "cycif.slide")
+
+mat.stromal3 <- as.data.frame(mat.stromal2)
+mat.cancer3 <- as.data.frame(mat.cancer2)
+
+mat.cancer3$Metacluster.ID <- dat.cancer.clin2$Metacluster.ID
+mat.stromal3$Metacluster.ID <- dat.stromal.clin2$Metacluster.ID
+
+#Generating heatmaps of marker expression by cell.type
+ind.plots.cancer = index_plots(mat.cancer3, mat.cancer3,
+                        gates.input=list(Pos=interesting.channels.cancer),
+                        scaling = "NONE", log2.transform = FALSE,
+                        GlobalCellType = "Metacluster.ID")
+
+ind.plots.stromal = index_plots(mat.stromal3, mat.stromal3,
+                        gates.input=list(Pos=interesting.channels.stromal),
+                        scaling = "NONE", log2.transform = FALSE,
+                        GlobalCellType = "Metacluster.ID")
+
+#Saving heatmaps
+pdf(file= paste0(outout.folder.name,"/Metaclusters_Cancer_Heatmap_Slide-scaled_Zscore.pdf"),
+    height = 8, width = 10)
+print(ind.plots.cancer[[3]])
+dev.off()
+
+#Saving heatmaps
+pdf(file= paste0(outout.folder.name,"/Metaclusters_Stromal_Heatmap_Slide-scaled_Zscore.pdf"),
+    height = 8, width = 10)
+print(ind.plots.stromal[[3]])
+dev.off()
+
+
 #Generating UMAPs, with labels by clusters and channel intensities
 mycolors.clusters <- colorRampPalette(brewer.pal(12, "Paired"))(12)
-metacluster_types <- factor(mat.stromal2$Metacluster.ID, levels=(unique(mat.stromal2$Metacluster.ID)))
+metacluster_types <- factor(mat.stromal2$Metacluster.ID,
+                            levels=(unique(mat.stromal2$Metacluster.ID)))
 #Metacluster
 umaps.stromal <- channel.UMAPs(mat.stromal2[,interesting.channels.stromal], metacluster_types,
-                               extralabel=list(dat.stromal$Slide, stromal.dat$therapy_sequence,
-                                               stromal.dat$Molecular_profile, stromal.dat$incyear),
+                               extralabel=list(dat.stromal.clin2$cycif.slide,
+                                               dat.stromal.clin2$therapy_sequence,
+                                               dat.stromal.clin2$Molecular_profile,
+                                               dat.stromal.clin2$incyear),
                                rowselectionstatus=NULL, sub.sample = TRUE, n.sampling = 25000,
                                user.colors=mycolors.clusters, umap_neighbors =50, umap_mindist=0.2)
 
 
 metacluster_types <- factor(mat.cancer2$Metacluster.ID, levels=(unique(mat.cancer2$Metacluster.ID))) 
 umaps.cancer <- channel.UMAPs(mat.cancer2[,interesting.channels.cancer], metacluster_types,
-                               extralabel=list(dat.cancer$Slide, cancer.dat$therapy_sequence,
-                                               cancer.dat$Molecular_profile, cancer.dat$incyear),
+                               extralabel=list(dat.cancer.clin2$cycif.slide,
+                                               dat.cancer.clin2$therapy_sequence,
+                                               dat.cancer.clin2$Molecular_profile,
+                                               dat.cancer.clin2$incyear),
                                rowselectionstatus=NULL, sub.sample = TRUE, n.sampling = 25000,
                                user.colors=mycolors.clusters, umap_neighbors =50, umap_mindist=0.2)
 
 umap.outputnames <- c("clusterLabel","Slide", "Therapy", "MolProfile","Year")
 
-ggsave(file=paste0(outout.folder.name,"Metaclusters_Stromal_UMAPs_channels_Slide-scaled2.pdf"),
+ggsave(file=paste0(outout.folder.name,"/Metaclusters_Stromal_UMAPs_channels_Slide-scaled2.pdf"),
        arrangeGrob(grobs = umaps.stromal[[1]], ncol = 4), height = 12, width = 10)
-ggsave(file=paste0(outout.folder.name,"Metaclusters_Stromal_UMAPs_channels_Slide-scaled2.png"),
+ggsave(file=paste0(outout.folder.name,"/Metaclusters_Stromal_UMAPs_channels_Slide-scaled2.png"),
        arrangeGrob(grobs = umaps.stromal[[1]], ncol = 4), height = 5.3, width = 6.1)
 for (i in 2:length(umaps.stromal)){
   j <- i-1
-  ggsave(file=paste0(outout.folder.name,"Metaclusters_Stromal_UMAPs_",umap.outputnames[j],"_Slide-scaled2.pdf"),
+  ggsave(file=paste0(outout.folder.name,"/Metaclusters_Stromal_UMAPs_",umap.outputnames[j],"_Slide-scaled2.pdf"),
        umaps.stromal[[i]], height = 6.89, width = 7.93)
 }
 
-
-ggsave(file=paste0(outout.folder.name,"Metaclusters_Cancer_UMAPs_channels_Slide-scaled2.pdf"),
+ggsave(file=paste0(outout.folder.name,"/Metaclusters_Cancer_UMAPs_channels_Slide-scaled2.pdf"),
        arrangeGrob(grobs = umaps.cancer[[1]], ncol = 4), height = 12, width = 10)
-ggsave(file=paste0(outout.folder.name,"Metaclusters_Cancer_UMAPs_channels_Slide-scaled2.png"),
-       arrangeGrob(grobs = umaps.cancer[[1]], ncol = 4), height = 5.3, width = 6.1)
+ggsave(file=paste0(outout.folder.name,"/Metaclusters_Cancer_UMAPs_channels_Slide-scaled2.png"),
+       arrangeGrob(grobs = umaps.cancer[[1]], ncol = 4), height = 7, width = 8)
 for (i in 2:length(umaps.cancer)){
   j <- i-1
-  ggsave(file=paste0(outout.folder.name,"Metaclusters_Cancer_UMAPs_",umap.outputnames[j],"_Slide-scaled2.pdf"),
+  ggsave(file=paste0(outout.folder.name,"/Metaclusters_Cancer_UMAPs_",umap.outputnames[j],"_Slide-scaled2.pdf"),
        umaps.cancer[[i]], height = 6.89, width = 7.93)
 }
 
@@ -306,16 +381,16 @@ for (i in 2:length(umaps.cancer)){
 
 ```{r}
 #Counting the abundance of metaclusters per slide
-stromal.dat$Metacluster.ID <- mat.stromal2$Metacluster.ID
-cancer.dat$Metacluster.ID <- mat.cancer2$Metacluster.ID
+dat.stromal.clin$Metacluster.ID <- mat.stromal2$Metacluster.ID
+dat.cancer.clin$Metacluster.ID <- mat.cancer2$Metacluster.ID
 
-cluster.counts.strom  <- stromal.dat %>% 
+cluster.counts.strom  <- dat.stromal.clin %>% 
                          group_by(Metacluster.ID, cycif.slide) %>%
                          summarise(N = n()) %>%
                          mutate(Total_in_cluster = sum(N), 
                          Ratio = round(N/Total_in_cluster, 2))
 
-cluster.counts.can  <- cancer.dat %>% 
+cluster.counts.can  <- dat.cancer.clin %>% 
                          group_by(Metacluster.ID, cycif.slide) %>%
                          summarise(N = n()) %>%
                          mutate(Total_in_cluster = sum(N), 
@@ -331,13 +406,13 @@ p.can= ggplot(cluster.counts.can, aes(x=Metacluster.ID, y=Ratio, fill=cycif.slid
 
 
 #Counting the abundance of metaclusters per therapy
-cluster.counts.strom2  <- stromal.dat %>% 
+cluster.counts.strom2  <- dat.stromal.clin %>% 
                          group_by(Metacluster.ID, therapy_sequence) %>%
                          summarise(N = n()) %>%
                          mutate(Total_in_cluster = sum(N), 
                          Ratio = round(N/Total_in_cluster, 2))
 
-cluster.counts.can2  <- cancer.dat %>% 
+cluster.counts.can2  <- dat.cancer.clin %>% 
                          group_by(Metacluster.ID, therapy_sequence) %>%
                          summarise(N = n()) %>%
                          mutate(Total_in_cluster = sum(N), 
@@ -354,13 +429,13 @@ p2.can  = ggplot(cluster.counts.can2, aes(x=Metacluster.ID, y=Ratio, fill=therap
 
 
 #Counting the abundance of metaclusters per molecular profile
-cluster.counts.strom3  <- stromal.dat %>% 
+cluster.counts.strom3  <- dat.stromal.clin %>% 
                          group_by(Metacluster.ID, Molecular_profile) %>%
                          summarise(N = n()) %>%
                          mutate(Total_in_cluster = sum(N), 
                          Ratio = round(N/Total_in_cluster, 2))
 
-cluster.counts.can3  <- cancer.dat %>% 
+cluster.counts.can3  <- dat.cancer.clin %>% 
                          group_by(Metacluster.ID, Molecular_profile) %>%
                          summarise(N = n()) %>%
                          mutate(Total_in_cluster = sum(N), 
@@ -402,23 +477,23 @@ ggsave(p3.can, filename = paste0(outout.folder.name, "Metaclusters_Cancer_MolPro
 #Writing results in Napary format
 CoreSuffix <- "_Probabilities_cytomask2"
 project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
-outputfolder <- "Metaclusters_Napary"
+outputfolder <- "Metaclusters_Napary2023"
 
-for (i in unique(stromal.dat$cycif.slide)[1:5]){
+for (i in unique(dat.stromal$cycif.slide)){
   dir.create(paste0(project.folder, "/", i,"/", outputfolder))
-  set.stromal <- stromal.dat[stromal.dat$cycif.slide == i,]
+  set.stromal <- dat.stromal[dat.stromal$cycif.slide == i,]
   set.stromal$Metacluster.ID <- sub("Cluster","StromalClus",set.stromal$Metacluster.ID)
-  set.cancer <- cancer.dat[cancer.dat$cycif.slide == i,]
+  set.cancer <- dat.cancer[dat.cancer$cycif.slide == i,]
   set.cancer$Metacluster.ID <- sub("Cluster","CancerClus",set.cancer$Metacluster.ID)
   cells.slide <- rbind(set.stromal, set.cancer)
   for (core in unique(cells.slide$cycif.core.id)){
     cells.core <- cells.slide[cells.slide$cycif.core.id == core,]
-    df <- data.frame(Core_Names=paste0("core",cells.core$cycif.core.id,CoreSuffix),
+    df <- data.frame(Core_Names=paste0(cells.core$cycif.core.id,CoreSuffix),
                      Cellid=cells.core$CellId,
                      lost=cells.core$lost,
                      GlobalCellType=cells.core$Metacluster.ID)
     df <- df[order(df$Cellid),]
-    write.table(df, file=paste0(project.folder, i,"/", outputfolder,"/","core",core,"_metaclusters_Napary.csv"),
+    write.table(df, file=paste0(project.folder, i,"/", outputfolder,"/",core,"_metaclusters_Napary.csv"),
                 sep=",", row.names = FALSE)
   }
 }
