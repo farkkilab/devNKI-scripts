@@ -1,0 +1,397 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(ggplot2)
+library(survival)
+library(dplyr)
+library(tidyverse)
+```
+
+
+```{r}
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN/"
+```
+
+
+#Reading clinical info
+```{r}
+cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.csv", sep=",", header = TRUE)
+
+clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
+
+#Merging clinical data with shallowHRD
+shallowHRDresults <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/shallowHRD_summary_table.csv", header=TRUE, sep=",")
+
+IDs <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/sample_names_sWGS.csv", sep=",", header=TRUE)
+```
+
+
+#Reading RCN proportions
+```{r}
+RCN.proportions.image <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN/RCN_by_image.csv", sep=",",header = TRUE)
+```
+
+#Merging clinical info with shallowHRD and creating new Molecular merker
+```{r}
+colnames(shallowHRDresults)[3] <- "ShallowHRDcall"
+
+IDs$CF.ID.number <- as.numeric(sub("X","", IDs$CF.ID.number))
+clindata.swgs <- merge(clin.tcycif, IDs, by.x="CFsample", by.y="Description", all.x = TRUE)
+clindata.shrd <- merge(clindata.swgs, shallowHRDresults, by.x="CF.ID.number", by.y="Sample", all.x = TRUE)
+
+
+BRCAsamples <- clindata.shrd[clindata.shrd$BRCA_methylation == "BRCA hypermethylation" | grepl("BRCA", clindata.shrd$BRCA_mutation),"patient"]
+
+CCNE1amp <- clindata.shrd[clindata.shrd$CCNE1_revised == "Amplification", "patient"]
+
+HRDshallow <- clindata.shrd[which(clindata.shrd$ShallowHRDcall == "positive"),"patient"]
+HRPshallow <- clindata.shrd[which(clindata.shrd$ShallowHRDcall == "borderline" | clindata.shrd$ShallowHRDcall == "negative"),"patient"]
+
+BRCAnessPos <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "BRCAness mutation"),"patient"]
+BRCAnessNeg <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "No BRCAness mutation"),"patient"]
+
+
+clindata.shrd$Molecular.profile2 <- rep("Other",  nrow(clindata.shrd))
+
+clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "HRD"
+clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "HRP"
+# clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "BRCAness+sHRD-"
+# clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "BRCAness-sHRD+"
+
+clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "Other"
+clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "Other"
+
+
+
+clindata.shrd[which(clindata.shrd$patient %in% CCNE1amp), "Molecular.profile2"] <- "CCNE1amp"
+clindata.shrd[which(clindata.shrd$patient %in% BRCAsamples), "Molecular.profile2"] <- "BRCAmut/met"
+
+clindata.shrd[which(clindata.shrd$QC_BRCA_CCNE == 1), "Molecular.profile2"] <- "Other"
+
+
+clindata.shrd$imageid <- paste0(clindata.shrd$cycif.slide, "_", clindata.shrd$cycif.core.id)
+
+colmns.interest <- c("Molecular.profile2", "patient","figo_stage","therapy_sequence","finalstatus",
+                "timelastfu","daystoprogression","progression")
+clindata.shrd.patient <- unique(clindata.shrd[,colmns.interest])
+
+Molecular.profiles.new <- clindata.shrd.patient %>% select(patient, Molecular.profile2)
+write.table(Molecular.profiles.new,
+            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_2023.csv",
+            sep=",", row.names=FALSE)
+```
+
+
+
+#Merging RCN information with clinical.data and calculating proportion by patient and cutoff points for high abundance
+```{r}
+RCN.proportions.image.patient <- merge(RCN.proportions.image, clindata.shrd, by="imageid")[,c(1,2,3,7)]
+
+RCN.proportions.patient <- RCN.proportions.image.patient %>% 
+                                  group_by(patient, rcn_id) %>% 
+                                  summarise(Total=sum(N)) %>% 
+                                  mutate(Proportion=round(Total*100/sum(Total),2))
+
+RCN.proportions.patient <- RCN.proportions.patient[,-3] #This can be merged with Molecular.profile2 for boxplots
+
+RCN.proportions.patient.m <- RCN.proportions.patient %>%
+                              pivot_wider(names_from = rcn_id, values_from = Proportion)
+
+
+RCN.proportions.patient.m <- as.data.frame(RCN.proportions.patient.m)
+row.names(RCN.proportions.patient.m) <- RCN.proportions.patient.m[,1]
+RCN.proportions.patient.m[is.na(RCN.proportions.patient.m)] <- 0
+
+RCN.proportions.patient.m.clin <- merge(RCN.proportions.patient.m, clindata.shrd,
+                                        by="patient")
+
+RCN.proportions.patient.clin <- merge(RCN.proportions.patient, clindata.shrd.patient,
+                                        by="patient")
+
+
+cutpoints <- sapply(colnames(RCN.proportions.patient.m)[-1], function(x){
+              var = x
+              sd.var <- sd(RCN.proportions.patient.m[,var])
+              median.var <- median(RCN.proportions.patient.m[,var])
+              cutpoint <- median.var + sd.var
+              return(cutpoint)
+})
+RCN.proportions.patient.clin
+```
+
+#Calculating cut-off point to stablish high abundance of RNC per patient
+```{r}
+RCN.proportions.patient.clin$Molecular.profile2 <- factor(RCN.proportions.patient.clin$Molecular.profile2,
+                                              levels=c("BRCAmut/met","HRD","HRP","CCNE1amp","Other"))
+
+rcn_set1 <- c("RCN01c","RCN02c")
+ggplot(RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,],
+       aes(x=Molecular.profile2,y=Proportion, colour=Molecular.profile2)) +
+  geom_boxplot() + facet_wrap(~rcn_id) + theme_bw() + xlab("Molecular profile") +
+  theme(axis.text.x = element_blank()) 
+
+
+rcn_set1 <- c("RCN03c","RCN05c","RCN07c","RCN08c","RCN09c","RCN11c","RCN12c","RCN13c")
+ggplot(RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,],
+       aes(x=Molecular.profile2,y=Proportion, colour=Molecular.profile2)) +
+  geom_boxplot() + facet_wrap(~rcn_id) + theme_bw() + xlab("Molecular profile") +
+  theme(axis.text.x = element_blank()) + 
+  ylim(0,10)
+```
+
+
+
+```{r}
+#Plot for RCNs with higher abundace
+
+#Statistics of difference in abundance of RNC4 vs RNC6 by Molecular profiles
+p.vals.RCN4vsRCN6<- sapply(unique(RCN.proportions.patient.clin$Molecular.profile2), function(x){
+  mol.dat <- RCN.proportions.patient.clin[RCN.proportions.patient.clin$Molecular.profile2 %in% x,]
+  prop.rcn4 <- mol.dat$Proportion[mol.dat$rcn_id == "RCN04c"]
+  prop.rcn6 <- mol.dat$Proportion[mol.dat$rcn_id == "RCN06c"]
+  wtest <- wilcox.test(prop.rcn4, prop.rcn6)
+  wtest$p.value
+})
+#Organizing p-values in data.frame for plotting using geom_text
+p.vals.dataframe <- data.frame(pval=p.vals.RCN4vdRCN,
+                     Molecular.profile=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     y.val=28,
+                     rcn_id="RCN04c")
+
+rcn_set1 <- c("RCN04c","RCN06c")
+p <- ggplot(RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,],
+       aes(x=Molecular.profile2,y=Proportion, fill=rcn_id)) +
+  geom_boxplot(outlier.shape = NA) + theme_bw() + xlab("Molecular profile") +
+  theme(legend.title = element_blank(), axis.text.x=element_text(size=rel(1.2)),
+        axis.title.x = element_text(size=rel(1.2)), axis.title.y = element_text(size=rel(1.2)),
+        axis.text.y=element_text(size=rel(1.2))) +
+  scale_fill_manual(values = c("grey85", "grey30")) + ylim(0,32) +
+  geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile, y=y.val),
+            label="*", size=8)
+p
+
+
+
+#For RCN06c
+rcn_set1 <- c("RCN06c")
+#Statistics of difference in abundance of RNC6 in BRCAmut samples vs other Molecular profiles
+p.vals.RCN6vsBRCA<- sapply(unique(RCN.proportions.patient.clin$Molecular.profile2), function(x){
+  mol.dat <- RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,]
+  prop.BRCAmut <- mol.dat$Proportion[mol.dat$Molecular.profile2 == "BRCAmut/met"]
+  prop.x <- mol.dat$Proportion[mol.dat$Molecular.profile2 == x]
+  wtest <- wilcox.test(prop.BRCAmut, prop.x)
+  wtest$p.value
+})
+#Organizing p-values in data.frame for plotting using geom_text
+p.vals.dataframe <- data.frame(pval=p.vals.RCN6vsBRCA,
+                     Molecular.profile=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     y.val=18,
+                     Molecular.profile2=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     rcn_id=rcn_set1)
+
+ggplot(RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,],
+       aes(x=Molecular.profile2,y=Proportion, fill=Molecular.profile2)) +
+  geom_boxplot(outlier.shape = NA) + theme_bw() + xlab("Molecular profile") +
+  theme(axis.text.x=element_text(size=rel(1.2)), axis.title.x = element_text(size=rel(1.2))) + ylim(0,30) +
+  geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile, y=y.val),
+            label="*", size=8) +
+  annotate("text", x=2, y=30, label="P-values calculated againts BRCAmut", fontface="italic") +
+  ggtitle(rcn_set1)
+
+
+#For RCN05c
+rcn_set1 <- c("RCN05c")
+#Statistics of difference in abundance of RCN05c in BRCAmut samples vs other Molecular profiles
+p.vals.RCN6vsBRCA<- sapply(unique(RCN.proportions.patient.clin$Molecular.profile2), function(x){
+  mol.dat <- RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,]
+  prop.BRCAmut <- mol.dat$Proportion[mol.dat$Molecular.profile2 == "BRCAmut/met"]
+  prop.x <- mol.dat$Proportion[mol.dat$Molecular.profile2 == x]
+  wtest <- wilcox.test(prop.BRCAmut, prop.x)
+  wtest$p.value
+})
+#Organizing p-values in data.frame for plotting using geom_text
+p.vals.dataframe <- data.frame(pval=p.vals.RCN6vsBRCA,
+                     Molecular.profile=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     y.val=8,
+                     Molecular.profile2=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     rcn_id=rcn_set1)
+
+ggplot(RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,],
+       aes(x=Molecular.profile2,y=Proportion, fill=Molecular.profile2)) +
+  geom_boxplot() + theme_bw() + xlab("Molecular profile") +
+  theme(axis.text.x=element_text(size=rel(1.2)), axis.title.x = element_text(size=rel(1.2))) + ylim(0,10) +
+  geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile, y=y.val),
+            label="*", size=8) +
+  annotate("text", x=2, y=10, label="P-values calculated againts BRCAmut", fontface="italic") +
+  ggtitle(rcn_set1)
+
+
+#For RCN11c
+rcn_set1 <- c("RCN11c")
+#Statistics of difference in abundance of RCN05c in BRCAmut samples vs other Molecular profiles
+p.vals.RCN6vsBRCA<- sapply(unique(RCN.proportions.patient.clin$Molecular.profile2), function(x){
+  mol.dat <- RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,]
+  prop.BRCAmut <- mol.dat$Proportion[mol.dat$Molecular.profile2 == "BRCAmut/met"]
+  prop.x <- mol.dat$Proportion[mol.dat$Molecular.profile2 == x]
+  wtest <- wilcox.test(prop.BRCAmut, prop.x)
+  wtest$p.value
+})
+#Organizing p-values in data.frame for plotting using geom_text
+p.vals.dataframe <- data.frame(pval=p.vals.RCN6vsBRCA,
+                     Molecular.profile=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     y.val=6,
+                     Molecular.profile2=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     rcn_id=rcn_set1)
+
+ggplot(RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,],
+       aes(x=Molecular.profile2,y=Proportion, fill=Molecular.profile2)) +
+  geom_boxplot() + theme_bw() + xlab("Molecular profile") +
+  theme(axis.text.x=element_text(size=rel(1.2)), axis.title.x = element_text(size=rel(1.2))) + ylim(0,8) +
+  geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile, y=y.val),
+            label="*", size=8) +
+  annotate("text", x=2, y=10, label="P-values calculated againts BRCAmut", fontface="italic") +
+  ggtitle(rcn_set1)
+
+
+#For RCN12c
+rcn_set1 <- "RCN12c"
+print(rcn_set1)
+#Statistics of difference in abundance of RCN05c in BRCAmut samples vs other Molecular profiles
+p.vals.RCN6vsBRCA<- sapply(unique(RCN.proportions.patient.clin$Molecular.profile2), function(x){
+  mol.dat <- RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,]
+  prop.BRCAmut <- mol.dat$Proportion[mol.dat$Molecular.profile2 == "CCNE1amp"]
+  prop.x <- mol.dat$Proportion[mol.dat$Molecular.profile2 == x]
+  wtest <- wilcox.test(prop.BRCAmut, prop.x)
+  wtest$p.value
+})
+print(p.vals.RCN6vsBRCA)
+
+#Organizing p-values in data.frame for plotting using geom_text
+p.vals.dataframe <- data.frame(pval=p.vals.RCN6vsBRCA,
+                     Molecular.profile=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     y.val=6,
+                     Molecular.profile2=unique(RCN.proportions.patient.clin$Molecular.profile2),
+                     rcn_id=rcn_set1)
+
+ggplot(RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% rcn_set1,],
+       aes(x=Molecular.profile2,y=Proportion, fill=Molecular.profile2)) +
+  geom_boxplot() + theme_bw() + xlab("Molecular profile") +
+  theme(axis.text.x=element_text(size=rel(1.2)), axis.title.x = element_text(size=rel(1.2))) + ylim(0,3) +
+  geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile, y=y.val),
+            label="*", size=8) +
+  annotate("text", x=2, y=10, label="P-values calculated againts BRCAmut", fontface="italic") +
+  ggtitle(rcn_set1)
+
+```
+
+
+
+```{r}
+RCN.proportions.patient.clin.04 <- RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% "RCN04c",]
+
+RCN.proportions.patient.clin.06 <- RCN.proportions.patient.clin[RCN.proportions.patient.clin$rcn_id %in% "RCN06c",]
+
+HRP.rcn06 <- RCN.proportions.patient.clin.06$Proportion[RCN.proportions.patient.clin.06$Molecular.profile2 == "HRP"]
+
+HRP.rcn04 <- RCN.proportions.patient.clin.04$Proportion[RCN.proportions.patient.clin.04$Molecular.profile2 == "HRP"]
+p.vals.HRP.rcn04 <- sapply(unique(RCN.proportions.patient.clin.04$Molecular.profile2), function(x){
+  w.tst <- wilcox.test(HRP.rcn04, 
+        RCN.proportions.patient.clin.04$Proportion[RCN.proportions.patient.clin.04$Molecular.profile2 == x])
+  w.tst$p.value
+})
+names(p.vals.HRP.rcn04) <- unique(RCN.proportions.patient.clin.04$Molecular.profile2)
+
+BRCAmut.rcn06 <- RCN.proportions.patient.clin.06$Proportion[RCN.proportions.patient.clin.06$Molecular.profile2 == "BRCAmut/met"]
+p.vals.BRCAmut.rcn06 <- sapply(unique(RCN.proportions.patient.clin.06$Molecular.profile2), function(x){
+  w.tst <- wilcox.test(BRCAmut.rcn06, 
+        RCN.proportions.patient.clin.06$Proportion[RCN.proportions.patient.clin.06$Molecular.profile2 == x])
+  w.tst$p.value
+})
+names(p.vals.BRCAmut.rcn06) <- unique(RCN.proportions.patient.clin.06$Molecular.profile2)
+
+print(p.vals.HRP.rcn04)
+print(p.vals.BRCAmut.rcn06)
+wilcox.test(HRP.rcn06, HRP.rcn04)
+```
+
+
+
+
+#Performing Kapplan-Meir plots for the abundance of each cell.type, according to therapy sequence
+```{r}
+suffix <- c("PDS","NACT")
+list.class <- list(c("Only debulking","Primairy debulking"),
+                   c("NACT","PDS followed by NACT", "NACT followed by re-debulking"))
+
+for (j in 1:length(suffix)){
+  data.in <- cells_percentages.mc[cells_percentages.mc$therapy_sequence %in% list.class[[j]],]
+  lastcol <- ncol(data.in)
+  colnames(data.in)[2] <- "Bcells"
+  
+  plots.OS <- lapply(vars.all, function(x){
+  vars = x
+  cut.off.value <- cutpoints[names(cutpoints) == vars]
+  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+  data.in[,lastcol] <- cat.var
+  colnames(data.in)[lastcol] <- "aux"
+  fit <- survfit(Surv(timelastfu, finalstatus) ~ aux, data = data.in)
+  logrank = surv_pvalue(fit, data.in)
+  pval=logrank$pval.txt
+  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
+                  font.x = c(18, "plain"), font.y = c(18, "plain"),
+                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
+                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
+                  palette = c("#34A0D3" ,"#FA5A41")) + 
+        guides(colour = guide_legend(nrow = 2))
+  p <- p + ylab("OS probability") + xlab("Time (days)")
+  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
+  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
+  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
+  plots <- list(plot=p$plot, table=p$table)
+  return(plots)
+  })
+  fig.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$plot})
+  tables.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$table})
+  
+  
+  plots.PFI <- lapply(vars.all, function(x){
+  vars = x
+  cut.off.value <- cutpoints[names(cutpoints) == vars]
+  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+  data.in[,lastcol] <- cat.var
+  colnames(data.in)[lastcol] <- "aux"
+  fit <- survfit(Surv(daystoprogression, progression) ~ aux, data = data.in)
+  logrank = surv_pvalue(fit, data.in)
+  pval=logrank$pval.txt
+  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
+                  font.x = c(18, "plain"), font.y = c(18, "plain"),
+                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
+                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
+                  palette = c("#34A0D3" ,"#FA5A41")) + 
+        guides(colour = guide_legend(nrow = 2))
+  p <- p + ylab("PFI probability") + xlab("Time (days)")
+  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
+  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
+  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
+  plots <- list(plot=p$plot, table=p$table)
+  return(plots)
+  })
+  fig.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$plot})
+  tables.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$table})
+  
+  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions",suffix[j], ".png"), arrangeGrob(grobs = fig.OS, ncol = 2), width = 28, height = 40, units = "cm")
+  
+  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions",suffix[j], "-table.png"), arrangeGrob(grobs = tables.OS, ncol = 2), width = 28, height = 40, units = "cm")
+  
+  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions",suffix[j],".png"), arrangeGrob(grobs = fig.PFI, ncol = 2), width = 28, height = 40, units = "cm")
+  
+  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions",suffix[j],"-table.png"), arrangeGrob(grobs = tables.PFI, ncol = 2), width = 28, height = 40, units = "cm")
+}
+```
