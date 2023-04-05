@@ -1,0 +1,196 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library()
+
+```
+
+
+
+#Calculating cut-off points to definy high abundance of cells for survival analysis
+```{r}
+core.percentages <- merged.dat %>% group_by(patient, cycif.core.id, GlobalCellType) %>%
+                    summarise(n = n()) %>%
+                    mutate(Proportion = n / sum(n))
+
+max.cell.percentages <- core.percentages  %>%
+                        group_by(patient, GlobalCellType) %>%
+                        summarise(Proportion=max(Proportion))
+
+cell.percentages2 <- as.data.frame(max.cell.percentages)
+cells_percentages.m <- cell.percentages2 %>% 
+                        pivot_wider(names_from = GlobalCellType, values_from = Proportion)
+
+cells_percentages.m <- as.data.frame(cells_percentages.m)
+row.names(cells_percentages.m) <- cells_percentages.m[,1]
+cells_percentages.m[is.na(cells_percentages.m)] <- 0
+
+cells_percentages.mc <- merge(cells_percentages.m, clinical.info, by.x="patient", by.y="TnumberAVL")
+
+
+
+colnames(cells_percentages.mc)[2] <- "Bcells"
+vars.all = c("CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD8.effector.T.cells",
+             "Bcells","CD4.T.cells","CD4.T.cells","CD4.CD45RO.T.cells",
+             "CD11c.MY","CD15.MY","CD163.MP","CD207.MY","T.regs","Other.MY")
+
+cutpoints <- sapply(vars.all, function(x){
+              var = x
+              #cutval.var <- surv_cutpoint(cells_percentages.mc, time = "daystoprogression",
+              #                            event = "progression", variables=var)
+              #cutpoint <- cutval.var$cutpoint[1]
+              #names(cutpoint) <- NULL
+              sd.var <- sd(cells_percentages.mc[,var])
+              median.var <- median(cells_percentages.mc[,var])
+              cutpoint <- median.var #+ sd.var
+              return(cutpoint)
+})
+```
+
+
+#Performing Kapplan-Meir plots for the abundance of each cell.type, according to therapy sequence
+```{r}
+suffix <- c("PDS","NACT")
+list.class <- list(c("Only debulking","Primairy debulking"),
+                   c("NACT","PDS followed by NACT", "NACT followed by re-debulking"))
+
+for (j in 1:length(suffix)){
+  data.in <- cells_percentages.mc[cells_percentages.mc$therapy_sequence %in% list.class[[j]],]
+  lastcol <- ncol(data.in)
+  colnames(data.in)[2] <- "Bcells"
+  
+  plots.OS <- lapply(vars.all, function(x){
+  vars = x
+  cut.off.value <- cutpoints[names(cutpoints) == vars]
+  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+  data.in[,lastcol] <- cat.var
+  colnames(data.in)[lastcol] <- "aux"
+  fit <- survfit(Surv(timelastfu, finalstatus) ~ aux, data = data.in)
+  logrank = surv_pvalue(fit, data.in)
+  pval=logrank$pval.txt
+  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
+                  font.x = c(18, "plain"), font.y = c(18, "plain"),
+                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
+                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
+                  palette = c("#34A0D3" ,"#FA5A41")) + 
+        guides(colour = guide_legend(nrow = 2))
+  p <- p + ylab("OS probability") + xlab("Time (days)")
+  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
+  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
+  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
+  plots <- list(plot=p$plot, table=p$table)
+  return(plots)
+  })
+  fig.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$plot})
+  tables.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$table})
+  
+  
+  plots.PFI <- lapply(vars.all, function(x){
+  vars = x
+  cut.off.value <- cutpoints[names(cutpoints) == vars]
+  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+  data.in[,lastcol] <- cat.var
+  colnames(data.in)[lastcol] <- "aux"
+  fit <- survfit(Surv(daystoprogression, progression) ~ aux, data = data.in)
+  logrank = surv_pvalue(fit, data.in)
+  pval=logrank$pval.txt
+  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
+                  font.x = c(18, "plain"), font.y = c(18, "plain"),
+                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
+                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
+                  palette = c("#34A0D3" ,"#FA5A41")) + 
+        guides(colour = guide_legend(nrow = 2))
+  p <- p + ylab("PFI probability") + xlab("Time (days)")
+  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
+  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
+  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
+  plots <- list(plot=p$plot, table=p$table)
+  return(plots)
+  })
+  fig.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$plot})
+  tables.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$table})
+  
+  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions",suffix[j], ".png"), arrangeGrob(grobs = fig.OS, ncol = 2), width = 28, height = 40, units = "cm")
+  
+  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions",suffix[j], "-table.png"), arrangeGrob(grobs = tables.OS, ncol = 2), width = 28, height = 40, units = "cm")
+  
+  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions",suffix[j],".png"), arrangeGrob(grobs = fig.PFI, ncol = 2), width = 28, height = 40, units = "cm")
+  
+  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions",suffix[j],"-table.png"), arrangeGrob(grobs = tables.PFI, ncol = 2), width = 28, height = 40, units = "cm")
+}
+```
+
+
+#Performing Kapplan-Meir plots for the abundance of each cell.type, for all data
+```{r}
+data.in <- cells_percentages.mc
+lastcol <- ncol(data.in)
+colnames(data.in)[2] <- "Bcells"
+
+plots.OS <- lapply(vars.all, function(x){
+  vars = x
+  cut.off.value <- cutpoints[names(cutpoints) == vars]
+  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+  data.in[,lastcol] <- cat.var
+  colnames(data.in)[lastcol] <- "aux"
+  fit <- survfit(Surv(timelastfu, finalstatus) ~ aux, data = data.in)
+  logrank = surv_pvalue(fit, data.in)
+  pval=logrank$pval.txt
+  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
+                  font.x = c(18, "plain"), font.y = c(18, "plain"),
+                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
+                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
+                  palette = c("#34A0D3" ,"#FA5A41")) + 
+        guides(colour = guide_legend(nrow = 2))
+  p <- p + ylab("OS probability") + xlab("Time (days)")
+  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
+  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
+  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
+  plots <- list(plot=p$plot, table=p$table)
+  return(plots)
+})
+fig.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$plot})
+tables.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$table})
+
+
+plots.PFI <- lapply(vars.all, function(x){
+  vars = x
+  cut.off.value <- cutpoints[names(cutpoints) == vars]
+  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+  data.in[,lastcol] <- cat.var
+  colnames(data.in)[lastcol] <- "aux"
+  fit <- survfit(Surv(daystoprogression, progression) ~ aux, data = data.in)
+  logrank = surv_pvalue(fit, data.in)
+  pval=logrank$pval.txt
+  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
+                  font.x = c(18, "plain"), font.y = c(18, "plain"),
+                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
+                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
+                  palette = c("#34A0D3" ,"#FA5A41")) + 
+        guides(colour = guide_legend(nrow = 2))
+  p <- p + ylab("PFI probability") + xlab("Time (days)")
+  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
+  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
+  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
+  plots <- list(plot=p$plot, table=p$table)
+  return(plots)
+})
+fig.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$plot})
+tables.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$table})
+
+ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions","ALL", ".png"), arrangeGrob(grobs = fig.OS, ncol = 2), width = 28, height = 40, units = "cm")
+
+ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions","ALL", "-table.png"), arrangeGrob(grobs = tables.OS, ncol = 2), width = 28, height = 40, units = "cm")
+
+ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions","ALL",".png"), arrangeGrob(grobs = fig.PFI, ncol = 2), width = 28, height = 40, units = "cm")
+
+ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions","ALL","-table.png"), arrangeGrob(grobs = tables.PFI, ncol = 2), width = 28, height = 40, units = "cm")
+
+```
