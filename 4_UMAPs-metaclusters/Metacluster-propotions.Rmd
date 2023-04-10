@@ -12,28 +12,40 @@ library(reshape2)
 
 # Loading all cells
 ```{r}
-big.cell.table <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info.csv", sep=",",
+big.cell.table <- read.table(file="/home/fernpere/NKI/Tables/All_cells_subtype-info_reduced.csv", sep=",",
                          header=TRUE)
+```
+
+
+```{r}
+colnames(big.cell.table)[colnames(big.cell.table) == "SubCellType"] <- "SubCelltype"
+big.cell.table$imageid <- paste(big.cell.table$cycif.slide, big.cell.table$cycif.core.id, sep="_")
+proportions.by.image  <- big.cell.table %>% group_by(imageid, SubCelltype) %>% summarise(N = n())
+proportions.by.image
 ```
 
 
 # Loading relevant files
 ```{r}
-project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
-out.put.folder <- "Analysis_results/02_MetaClusters_April/"
+#project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
+#out.put.folder <- "Analysis_results/02_MetaClusters_April/"
+
+project.folder <- "/home/fernpere/NKI/"
+out.put.folder <- "/02_MetaClusters_April/"
 
 proportions.by.image <- read.table(file=paste0(project.folder,out.put.folder, 
                                                "Metaclusters_abundance_per_core.csv"), header = TRUE, sep=",")
 
-molecular.profiles <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_2023.csv",
+molecular.profiles <- read.table(file="/home/fernpere/NKI/Clinical_data/Molecular_profiles_patients_2023.csv",
                                  header=TRUE, sep=",")
 
-cycif2patientIds <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt",
+cycif2patientIds <- read.table(file="/home/fernpere/NKI/Clinical_data/All-slides_cycif2samples.txt",
                                header=TRUE, sep="\t")
 
-cycif2patientIds$imageid <- paste0(cycif2patientIds$cycif.slide, "_" ,cycif2patientIds$cycif.core.id)
+cycif2patientIds$imageid <- paste0(cycif2patientIds$cycif.slide, "_"
+                                   ,cycif2patientIds$cycif.core.id)
 
-clinical.data <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.update.csv", header=TRUE,
+clinical.data <- read.table(file="/home/fernpere/NKI/Clinical_data/T-CycIF.update.csv", header=TRUE,
                             sep=",")
 ```
 
@@ -47,7 +59,6 @@ proportions.by.patient  <- proportions.by.image.p.id %>% group_by(patient, SubCe
                                         mutate(Proportion = N.sum * 100 /sum(N.sum))
 
 proportions.by.patient <- proportions.by.patient[,-3]
-
 
 proportions.by.patient.m <- as.data.frame(proportions.by.patient)  %>% 
                         pivot_wider(names_from = SubCelltype, values_from = Proportion)
@@ -70,13 +81,13 @@ proportions.by.patient.clin$Molecular.profile2 <- factor(proportions.by.patient.
 proportions.by.patient.clin
 ```
 
-# 
+# Making plots of general proportion
 ```{r}
 t <- "NACT"
 
 proportions.by.patient.sel <- proportions.by.patient.clin[proportions.by.patient.clin$therapy_sequence %in% t,]
 #proportions.by.patient.sel <- proportions.by.patient.clin
-c <- "Cancer"
+c <- "Stromal"
 proportions.c <- proportions.by.patient.sel[grep(c, proportions.by.patient.sel$SubCelltype),]
 
 proportions.c <- proportions.c %>% group_by(patient) %>% mutate(Rel.Prop = Proportion/sum(Proportion))
@@ -91,11 +102,11 @@ ggplot(proportions.c, aes(x=Molecular.profile2,y=Proportion, fill=Molecular.prof
 ```
 ```{r}
 #This is for proportion
-p.vals.markers1 <- function(data, Profile.test="HRD", y.val=25){
+p.vals.markers1 <- function(data, Profile.test="HRD", y.val=25, alt.hypothesis="greater"){
        test.dat <- data$Proportion[data$Molecular.profile2 == Profile.test]
        p.vals <- sapply(unique(data$Molecular.profile2), function(x){
                 mol.dat <- data$Proportion[data$Molecular.profile2 == x]
-                wtest <- wilcox.test(test.dat, mol.dat, alternative="greater")
+                wtest <- wilcox.test(test.dat, mol.dat, alternative=alt.hypothesis)
                 wtest$p.value
        })
       #Organizing p-values in data.frame for plotting using geom_text
@@ -106,11 +117,11 @@ p.vals.markers1 <- function(data, Profile.test="HRD", y.val=25){
 }
 
 #This is for relative proportions
-p.vals.markers2 <- function(data, Profile.test="HRD", y.val=25){
+p.vals.markers2 <- function(data, Profile.test="HRD", y.val=25, alt.hypothesis="greater"){
        test.dat <- data$Rel.Prop[data$Molecular.profile2 == Profile.test]
        p.vals <- sapply(unique(data$Molecular.profile2), function(x){
                 mol.dat <- data$Rel.Prop[data$Molecular.profile2 == x]
-                wtest <- wilcox.test(test.dat, mol.dat, alternative="greater")
+                wtest <- wilcox.test(test.dat, mol.dat, alternative=alt.hypothesis)
                 wtest$p.value
        })
       #Organizing p-values in data.frame for plotting using geom_text
@@ -122,48 +133,131 @@ p.vals.markers2 <- function(data, Profile.test="HRD", y.val=25){
 ```
 
 
-
+# Boxplots for cancer cells
 ```{r}
-t <- "NACT"
-
-proportions.by.patient.sel <- proportions.by.patient.clin[proportions.by.patient.clin$therapy_sequence %in% t,]
-c <- "Cancer"
-proportions.c <- proportions.by.patient.sel[grep(c, proportions.by.patient.sel$SubCelltype),]
-proportions.c <- proportions.c %>% group_by(patient) %>% mutate(Rel.Prop = Proportion/sum(Proportion))
+# Boxplots for cancer cells
+output.folder <- "/home/fernpere/NKI/02_MetaClusters_April/"
 
 
-###For Cancer cluster 1 by NACT, using relative proportion
-clus <- "CancerClus1"
-p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="CCNE1amp",
-                                    y.val=0.35)
+therapy.sequence.name <- c("NACT","PDS","ALL")
+therapy.sequence.id <- c("NACT","PDS",".")
+for (i in 1:length(therapy.sequence.id)){
+  t <- therapy.sequence.id[i]
+  n <- therapy.sequence.name[i]
+  if (t == "PDS"){
+    proportions.by.patient.sel <- proportions.by.patient.clin[!proportions.by.patient.clin$therapy_sequence %in% "NACT",]
+  }else{
+    proportions.by.patient.sel <- proportions.by.patient.clin[grep(t, proportions.by.patient.clin$therapy_sequence),]
+  }
+  c <- "Cancer"
+  proportions.c <- proportions.by.patient.sel[grep(c, proportions.by.patient.sel$SubCelltype),]
+  proportions.c <- proportions.c %>% group_by(patient) %>% mutate(Rel.Prop = Proportion/sum(Proportion))
+  
+  
+  ###For Cancer cluster 1 by NACT, using relative proportion
+  clus <- "CancerClus1"
+  p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="CCNE1amp",
+                                      y.val=0.35)
+  
+  p <- ggplot(proportions.c[proportions.c$SubCelltype == clus,],
+              aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
+    geom_boxplot(outlier.shape = NA) +  theme_bw() + xlab("Molecular profile") +
+    theme(axis.text.x = element_blank()) + 
+      geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
+              label="*", size=8) + ylim(0,0.45) + ggtitle(clus)
+  ggsave(p, filename=paste0(output.folder, "Boxplot_", clus,"_",n,".png"), height = 10, width = 11, units = "cm")
+  
+  
+  ###For Cancer cluster 2 by NACT, using relative proportion
+  clus <- "CancerClus2"
+  p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="CCNE1amp",
+                                      y.val=0.65)
+  
+  p <- ggplot(proportions.c[proportions.c$SubCelltype == clus,],
+              aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
+    geom_boxplot(outlier.shape = NA) +  theme_bw() + xlab("Molecular profile") +
+    theme(axis.text.x = element_blank()) + 
+      geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
+              label="*", size=8) + ylim(0,0.8) + ggtitle(clus)
+  ggsave(p, filename=paste0(output.folder, "Boxplot_", clus,"_",n,".png"), height = 10, width = 11, units = "cm")
+  
+  ###For cancer cluster 5
+  clus <- "CancerClus5"
+  p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="HRD",
+                                      y.val=0.8)
+  
+  p <- ggplot(proportions.c[proportions.c$SubCelltype == clus,],
+              aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
+    geom_boxplot(outlier.shape = NA) +  theme_bw() + xlab("Molecular profile") +
+    theme(axis.text.x = element_blank()) + 
+      geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
+              label="*", size=8) + ggtitle(clus)
+  ggsave(p, filename=paste0(output.folder, "Boxplot_", clus,"_",n,".png"), height = 10, width = 11, units = "cm")
+}
 
-ggplot(proportions.c[proportions.c$SubCelltype == clus,], aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
-  geom_boxplot(outlier.shape = NA) +  theme_bw() + xlab("Molecular profile") +
-  theme(axis.text.x = element_blank()) + 
-    geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
-            label="*", size=8) + ylim(0,0.45) + ggtitle(clus)
+```
 
-###For Cancer cluster 2 by NACT, using relative proportion
-clus <- "CancerClus2"
-p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="CCNE1amp",
-                                    y.val=0.65)
 
-ggplot(proportions.c[proportions.c$SubCelltype == clus,], aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
-  geom_boxplot(outlier.shape = NA) +  theme_bw() + xlab("Molecular profile") +
-  theme(axis.text.x = element_blank()) + 
-    geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
-            label="*", size=8) + ylim(0,0.8) + ggtitle(clus)
+# Boxplots for stromal cells
+```{r}
+# Boxplots for stromal cells
+output.folder <- "/home/fernpere/NKI/02_MetaClusters_April/"
 
-###For cancer cluster 5
-clus <- "CancerClus5"
-p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="HRD",
-                                    y.val=0.8)
-
-ggplot(proportions.c[proportions.c$SubCelltype == clus,], aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
-  geom_boxplot(outlier.shape = NA) +  theme_bw() + xlab("Molecular profile") +
-  theme(axis.text.x = element_blank()) + 
-    geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
-            label="*", size=8) + ggtitle(clus)
-
+therapy.sequence.name <- c("NACT","PDS","ALL")
+therapy.sequence.id <- c("NACT","PDS",".")
+for (i in 1:length(therapy.sequence.id)){
+  t <- therapy.sequence.id[i]
+  n <- therapy.sequence.name[i]
+  if (t == "PDS"){
+    proportions.by.patient.sel <- proportions.by.patient.clin[!proportions.by.patient.clin$therapy_sequence %in% "NACT",]
+  }else{
+    proportions.by.patient.sel <- proportions.by.patient.clin[grep(t, proportions.by.patient.clin$therapy_sequence),]
+  }
+  c <- "Stromal"
+  proportions.c <- proportions.by.patient.sel[grep(c, proportions.by.patient.sel$SubCelltype),]
+  proportions.c <- proportions.c %>% group_by(patient) %>% mutate(Rel.Prop = Proportion/sum(Proportion))
+  
+  
+  ###For Stromal cluster 1 by NACT, using relative proportion
+  clus <- "StromalClus1"
+  p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="HRD",
+                                      y.val=0.85, alt.hypothesis = "less")
+  
+  p <- ggplot(proportions.c[proportions.c$SubCelltype == clus,],
+              aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
+    geom_boxplot(outlier.shape = NA) +  theme_bw() + xlab("Molecular profile") +
+    theme(axis.text.x = element_blank()) + 
+      geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
+              label="*", size=8) + ylim(0,0.9) + ggtitle(clus) + 
+  annotate("text", x=2.5, y=0.9, label="P-values calculated againts HRD", fontface="italic", size = 2) 
+  ggsave(p, filename=paste0(output.folder, "Boxplot_", clus,"_",n,".png"), height = 10, width = 11, units = "cm")
+  
+  
+  ###For StromalClus3 by NACT, using relative proportion
+  clus <- "StromalClus3"
+  p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="HRD",
+                                      y.val=0.65)
+  
+  p <- ggplot(proportions.c[proportions.c$SubCelltype == clus,],
+              aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
+    geom_boxplot() +  theme_bw() + xlab("Molecular profile") +
+    theme(axis.text.x = element_blank()) + 
+      geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
+              label="*", size=8) + ylim(0,0.8) + ggtitle(clus)
+  ggsave(p, filename=paste0(output.folder, "Boxplot_", clus,"_",n,".png"), height = 10, width = 11, units = "cm")
+  
+  ###For stromal cluster 4
+  clus <- "StromalClus4"
+  p.vals.dataframe <- p.vals.markers2(proportions.c[proportions.c$SubCelltype == clus,], Profile.test="HRD",
+                                      y.val=0.6)
+  
+  p <- ggplot(proportions.c[proportions.c$SubCelltype == clus,],
+              aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
+    geom_boxplot(outlier.shape = NA) +  theme_bw() + xlab("Molecular profile") +
+    theme(axis.text.x = element_blank()) + 
+      geom_text(data = p.vals.dataframe[p.vals.dataframe$pval < 0.05,], aes(x=Molecular.profile2, y=Y.val),
+              label="*", size=8) + ylim(0,0.65) + ggtitle(clus)
+  ggsave(p, filename=paste0(output.folder, "Boxplot_", clus,"_",n,".png"), height = 10, width = 11, units = "cm")
+}
 ```
 
