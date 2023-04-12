@@ -8,45 +8,50 @@ output: html_notebook
 library(ggplot2)
 library(tidyverse)
 library(reshape2)
+library(survminer)
+library(survival)
+library(gridExtra)
 ```
 
 # Loading all cells
 ```{r}
-big.cell.table <- read.table(file="/home/fernpere/NKI/Tables/All_cells_subtype-info_reduced.csv", sep=",",
+big.cell.table <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info.csv", sep=",",
                          header=TRUE)
 ```
 
-
 ```{r}
-colnames(big.cell.table)[colnames(big.cell.table) == "SubCellType"] <- "SubCelltype"
-big.cell.table$imageid <- paste(big.cell.table$cycif.slide, big.cell.table$cycif.core.id, sep="_")
-proportions.by.image  <- big.cell.table %>% group_by(imageid, SubCelltype) %>% summarise(N = n())
-proportions.by.image
+big.cell.table$GlobalCellType
 ```
-
 
 # Loading relevant files
 ```{r}
-#project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
-#out.put.folder <- "Analysis_results/02_MetaClusters_April/"
+project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
+out.put.folder <- "/Analysis_results/02_MetaClusters_April/"
 
-project.folder <- "/home/fernpere/NKI/"
-out.put.folder <- "/02_MetaClusters_April/"
+# project.folder <- "/home/fernpere/NKI/"
+# out.put.folder <- "/02_MetaClusters_April/"
 
 proportions.by.image <- read.table(file=paste0(project.folder,out.put.folder, 
                                                "Metaclusters_abundance_per_core.csv"), header = TRUE, sep=",")
 
-molecular.profiles <- read.table(file="/home/fernpere/NKI/Clinical_data/Molecular_profiles_patients_2023.csv",
+molecular.profiles <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_2023.csv",
                                  header=TRUE, sep=",")
 
-cycif2patientIds <- read.table(file="/home/fernpere/NKI/Clinical_data/All-slides_cycif2samples.txt",
+cycif2patientIds <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt",
                                header=TRUE, sep="\t")
 
 cycif2patientIds$imageid <- paste0(cycif2patientIds$cycif.slide, "_"
                                    ,cycif2patientIds$cycif.core.id)
 
-clinical.data <- read.table(file="/home/fernpere/NKI/Clinical_data/T-CycIF.update.csv", header=TRUE,
+clinical.data <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.update.csv", header=TRUE,
                             sep=",")
+interesting.columns <- c("TnumberAVL", "figo_stage", "timelastfu", "finalstatus", "daystoprogression",
+                         "progression","therapy_sequence")
+clinical.data <- clinical.data[,colnames(clinical.data) %in%  interesting.columns]
+clinical.data$therapy_sequence <- ifelse(grepl("NACT", clinical.data$therapy_sequence),"NACT","PDS")
+clinical.data$daystoprogression <- clinical.data$daystoprogression / 30.4
+clinical.data$timelastfu <- clinical.data$timelastfu / 30.4
+clinical.data
 ```
 
 
@@ -78,28 +83,44 @@ proportions.by.patient.clin$therapy_sequence <- ifelse(grepl("NACT", proportions
 
 proportions.by.patient.clin$Molecular.profile2 <- factor(proportions.by.patient.clin$Molecular.profile2,
                                                          levels=c("BRCAmut/met","HRD","HRP","CCNE1amp","Other"))
+
+
 proportions.by.patient.clin
 ```
 
 # Making plots of general proportion
 ```{r}
-t <- "NACT"
+output.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_April/"
 
-proportions.by.patient.sel <- proportions.by.patient.clin[proportions.by.patient.clin$therapy_sequence %in% t,]
-#proportions.by.patient.sel <- proportions.by.patient.clin
-c <- "Stromal"
-proportions.c <- proportions.by.patient.sel[grep(c, proportions.by.patient.sel$SubCelltype),]
+therapy.sequence.name <- c("NACT","PDS","ALL")
+therapy.sequence.id <- c("NACT","PDS",".")
 
-proportions.c <- proportions.c %>% group_by(patient) %>% mutate(Rel.Prop = Proportion/sum(Proportion))
+for (i in 1:length(therapy.sequence.name)){
+  t <- therapy.sequence.name[i]
+  j <- therapy.sequence.id[i]
+  proportions.by.patient.sel <- proportions.by.patient.clin[grep(j, proportions.by.patient.clin$therapy_sequence),]
 
-ggplot(proportions.c, aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
-  geom_boxplot(outlier.shape = NA) + facet_wrap(~SubCelltype) + theme_bw() + xlab("Molecular profile") +
-  theme(axis.text.x = element_blank())
-
-ggplot(proportions.c, aes(x=Molecular.profile2,y=Proportion, fill=Molecular.profile2)) +
-  geom_boxplot(outlier.shape = NA) + facet_wrap(~SubCelltype) + theme_bw() + xlab("Molecular profile") +
-  theme(axis.text.x = element_blank())
+  for (c in c("Cancer","Stromal")){
+    proportions.c <- proportions.by.patient.sel[grep(c, proportions.by.patient.sel$SubCelltype),]
+    
+    proportions.c <- proportions.c %>% group_by(patient) %>% mutate(Rel.Prop = Proportion/sum(Proportion))
+    
+    p1 <- ggplot(proportions.c, aes(x=Molecular.profile2,y=Rel.Prop, fill=Molecular.profile2)) +
+      geom_boxplot(outlier.shape = NA) + facet_wrap(~SubCelltype) + theme_bw() + xlab("Molecular profile") +
+      theme(axis.text.x = element_blank())
+    ggsave(p1, filename=paste0(output.folder, "Boxplot_prop-relative_Allclusters_", c,"_",t,".png"),
+           height = 10, width = 13, units = "cm")
+    
+    p2 <- ggplot(proportions.c, aes(x=Molecular.profile2,y=Proportion, fill=Molecular.profile2)) +
+      geom_boxplot(outlier.shape = NA) + facet_wrap(~SubCelltype) + theme_bw() + xlab("Molecular profile") +
+      theme(axis.text.x = element_blank())
+    ggsave(p2, filename=paste0(output.folder, "Boxplot_prop-total_Allclusters_", c,"_",t,".png"),
+           height = 10, width = 13, units = "cm")
+  }
+}
 ```
+
+
 ```{r}
 #This is for proportion
 p.vals.markers1 <- function(data, Profile.test="HRD", y.val=25, alt.hypothesis="greater"){
@@ -136,7 +157,8 @@ p.vals.markers2 <- function(data, Profile.test="HRD", y.val=25, alt.hypothesis="
 # Boxplots for cancer cells
 ```{r}
 # Boxplots for cancer cells
-output.folder <- "/home/fernpere/NKI/02_MetaClusters_April/"
+#output.folder <- "/home/fernpere/NKI/02_MetaClusters_April/"
+output.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_April/"
 
 
 therapy.sequence.name <- c("NACT","PDS","ALL")
@@ -144,11 +166,9 @@ therapy.sequence.id <- c("NACT","PDS",".")
 for (i in 1:length(therapy.sequence.id)){
   t <- therapy.sequence.id[i]
   n <- therapy.sequence.name[i]
-  if (t == "PDS"){
-    proportions.by.patient.sel <- proportions.by.patient.clin[!proportions.by.patient.clin$therapy_sequence %in% "NACT",]
-  }else{
-    proportions.by.patient.sel <- proportions.by.patient.clin[grep(t, proportions.by.patient.clin$therapy_sequence),]
-  }
+  
+  proportions.by.patient.sel <- proportions.by.patient.clin[grep(t, proportions.by.patient.clin$therapy_sequence),]
+  
   c <- "Cancer"
   proportions.c <- proportions.by.patient.sel[grep(c, proportions.by.patient.sel$SubCelltype),]
   proportions.c <- proportions.c %>% group_by(patient) %>% mutate(Rel.Prop = Proportion/sum(Proportion))
@@ -201,7 +221,9 @@ for (i in 1:length(therapy.sequence.id)){
 # Boxplots for stromal cells
 ```{r}
 # Boxplots for stromal cells
-output.folder <- "/home/fernpere/NKI/02_MetaClusters_April/"
+#output.folder <- "/home/fernpere/NKI/02_MetaClusters_April/"
+output.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_April/"
+
 
 therapy.sequence.name <- c("NACT","PDS","ALL")
 therapy.sequence.id <- c("NACT","PDS",".")
@@ -260,4 +282,117 @@ for (i in 1:length(therapy.sequence.id)){
   ggsave(p, filename=paste0(output.folder, "Boxplot_", clus,"_",n,".png"), height = 10, width = 11, units = "cm")
 }
 ```
+
+
+
+#Function to create survival plots for each type of metacluster
+```{r}
+plot.OS <- function(vars, data.in, cutpoints){
+    cut.off.value <- cutpoints[names(cutpoints) == vars]
+    cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+    data.in <- cbind(data.in, cat.var)
+    fit <- survfit(Surv(timelastfu, finalstatus) ~ cat.var, data = data.in)
+    logrank = surv_pvalue(fit, data.in)
+    pval=logrank$pval.txt
+    p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                    font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
+                    font.x = c(18, "plain"), font.y = c(18, "plain"),
+                    tables.y.text = FALSE,  break.time.by=30, xlim = c(0,120),
+                    legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
+                    palette = c("#34A0D3" ,"#FA5A41")) + 
+          guides(colour = guide_legend(nrow = 2))
+    p <- p + ylab("OS probability") + xlab("Time (days)")
+    p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
+    p$plot <- p$plot + ggplot2::annotate("text", x = 90, y = 0.85, label =pval, size = 5)
+    p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
+    plots <- list(plot=p$plot, table=p$table)
+    return(plots)
+}
+
+
+plot.PFS <- function(vars, data.in, cutpoints){
+    cut.off.value <- cutpoints[names(cutpoints) == vars]
+    cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+    data.in <- cbind(data.in, cat.var)
+    fit <- survfit(Surv(daystoprogression, progression) ~ cat.var, data = data.in)
+    logrank = surv_pvalue(fit, data.in)
+    pval=logrank$pval.txt
+    p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                    font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
+                    font.x = c(18, "plain"), font.y = c(18, "plain"),
+                    tables.y.text = FALSE,  break.time.by=15, xlim = c(0,60),
+                    legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
+                    palette = c("#34A0D3" ,"#FA5A41")) + 
+          guides(colour = guide_legend(nrow = 2))
+    p <- p + ylab("PFS probability") + xlab("Time (days)")
+    p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
+    p$plot <- p$plot + ggplot2::annotate("text", x = 40, y = 0.85, label =pval, size = 5)
+    p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
+    plots <- list(plot=p$plot, table=p$table)
+    return(plots)
+}
+```
+
+
+
+
+
+
+```{r}
+out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_April/Survival/"
+
+types <- c("Cancer","Stromal")
+for (s in types){
+  sel.cols <- colnames(proportions.by.patient.surv)[grep(s,colnames(proportions.by.patient.surv))]
+  
+  proportions.sel <- proportions.by.patient.m[,c("patient",sel.cols)]
+  proportions.sel.rel <- proportions.sel
+  proportions.sel.rel[,-1] <- proportions.sel[,-1]/rowSums(proportions.sel[,-1])
+  
+  
+  proportions.tot.surv <- merge(proportions.sel, clinical.data, by.x="patient",
+                                       by.y="TnumberAVL")
+  proportions.rel.surv <- merge(proportions.sel.rel, clinical.data, by.x="patient",
+                                       by.y="TnumberAVL")
+  
+  cut.points.tot <- sapply(sel.cols, function(x){
+          sd.var <- sd(proportions.tot.surv[,x])
+          #cutpoint <- median(sd(proportions.tot.surv[,x])) + sd.var
+          cutpoint <- median(sd(proportions.tot.surv[,x]))
+          return(cutpoint)
+  })
+  
+  cut.points.rel <- sapply(sel.cols, function(x){
+          sd.var <- sd(proportions.rel.surv[,x])
+          #cutpoint <- median(sd(proportions.rel.surv[,x])) + sd.var
+          cutpoint <- median(sd(proportions.rel.surv[,x]))
+          return(cutpoint)
+  })
+  
+  
+  suffix <- c("PDS","NACT")
+  for (i in suffix){
+    data.surv <- proportions.rel.surv[proportions.rel.surv$therapy_sequence == i,]
+    
+    surv.tables.os <- lapply(sel.cols, plot.OS, data.surv, cut.points.rel)
+    fig.OS <- lapply(1:length(surv.tables.os) , function(x){surv.tables.os[[x]]$plot})
+    tables.OS <- lapply(1:length(surv.tables.os) , function(x){surv.tables.os[[x]]$table})
+    
+    ggsave(file=paste0(out.put.folder, "KM_OS_metacluster", s, "_", i, ".png"),
+             arrangeGrob(grobs = fig.OS, ncol = 2), width = 24, height = 28, units = "cm")
+    ggsave(file=paste0(out.put.folder, "KM_OS_metacluster", s, "_", i, "-table.png"),
+           arrangeGrob(grobs = tables.OS, ncol = 2), width = 24, height = 18, units = "cm")
+    
+    surv.tables.pfs <- lapply(sel.cols, plot.PFS, data.surv, cut.points.rel)
+    fig.pfs <- lapply(1:length(surv.tables.pfs) , function(x){surv.tables.pfs[[x]]$plot})
+    tables.pfs <- lapply(1:length(surv.tables.pfs) , function(x){surv.tables.pfs[[x]]$table})
+    
+    ggsave(file=paste0(out.put.folder, "KM_PFS_metacluster", s, "_", i, ".png"),
+             arrangeGrob(grobs = fig.pfs, ncol = 2), width = 24, height = 28, units = "cm")
+    ggsave(file=paste0(out.put.folder, "KM_PFS_metacluster", s, "_", i, "-table.png"),
+           arrangeGrob(grobs = tables.pfs, ncol = 2), width = 24, height = 18, units = "cm")
+  }
+}
+```
+
 
