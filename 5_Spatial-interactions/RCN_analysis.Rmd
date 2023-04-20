@@ -15,37 +15,55 @@ library(circlize)
 
 
 
-out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/Spatial_analysis/"
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/Spatial_analysis/April_2023/"
+source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/5_Spatial-interactions/RCN_inspection_functions.R")
 ```
 
 
 #Reading input cell dataset
 ```{r}
-cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All-cells_clusters.csv", header = TRUE, sep=",")
+cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_scimap-format_columns-reduced.csv",
+                    header = TRUE, sep=",")
 ```
 
 
 ```{r}
 rcn.folder <- "Analysis_results/Spatial_analysis/"
 input.prefix <- "Cluster_ids_"
+excluding.pattern <- "Cluster_ids_metaclusters"
+input.sufix <- "_k35.csv"
 project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
 output.napari <- "RCN_Napary"
 
-cores.interest <- c(109,110,112,114,116,118,120,122,10,11,111,113,115,117,119,121,141)
+#cores.interest <- c(109,110,112,114,116,118,120,122,10,29,111,113,115,117,119,121)
+cores.interest <- c(10)
 cores.interest <- sort(cores.interest)
 
 # List all the data
 files <- list.files(paste0(project.folder, rcn.folder), full.names = T)
 files <- files[grepl(pattern = input.prefix, x=files)]
+files <- files[grepl(pattern = input.sufix, x=files)]
+files <- files[!grepl(pattern = excluding.pattern, x=files)]
+
+counter <- 1
+list.counts <- list()
+methods.rnc <- NULL
 for (f in files){
   method.rcn <- strsplit(gsub(".csv","",basename(f)),"_")[[1]][3]
   print(method.rcn)
+  methods.rnc <- c(methods.rnc, method.rcn)
   RCN_clusters <- read.table(file=f, header = TRUE, sep=",")
-  cells$rcn_id <- paste0("RCN",RCN_clusters$spatial_kmeans)
+  
+  #Next lines to rename the RNC according to the abundance, so, RCN=1 would be the most abundant 
+  counts.by.RNC <- table(RCN_clusters[,2])
+  RCN.order <- order(counts.by.RNC, decreasing = TRUE)
+  RCN.order.values <- sapply(1:length(RCN.order), function(x){which(RCN.order == x)})
+  RCN_clusters[,2] <- RCN.order.values[c(RCN_clusters[,2] + 1)]
+  
+  cells$rcn_id <- paste0("RCN",RCN_clusters[,2])
   n.clust <- length(unique(cells$rcn_id))
-  n.clust <- n.clust-1
   cells$rcn_id <- factor(cells$rcn_id,
-                         levels=paste0("RCN",0:n.clust))
+                         levels=paste0("RCN",1:n.clust))
   ###########################################
   #Exporting data for visualization in Napari
   for (slide in unique(cells$cycif.slide)){
@@ -61,8 +79,8 @@ for (f in files){
       df <- data.frame(Core_Names=paste0("core",core,"_Probabilities_cytomask2"),
                      Cellid=sel.cell.core$CellId,
                      GlobalCellType=paste0("RCN",sel.cell.core$rcn_id))
-      write.table(df, file=paste0(outout.folder.name,"/core",core,"_RCN_Napari.csv"),
-                  sep=",", row.names = FALSE)
+      #write.table(df, file=paste0(outout.folder.name,"/core",core,"_RCN_Napari.csv"),
+      #            sep=",", row.names = FALSE)
     }
   }
 
@@ -73,76 +91,67 @@ for (f in files){
   ###########################################
   #Plotting heatmap annotations with diversity and abundance of clusters
   heatmap.diversity(cells, method=method.rcn)
+  
+  ##########Calculating proportions of cells and merging in list
+  list.counts.iter <- counts.by.GlobalCellType(cells)
+  list.counts[[counter]] <- list.counts.iter
+  counter <- counter + 1
+  rm(list.counts.iter)
 }
 ```
 
-#Functions to be used
 ```{r}
-#Barplot for the RCN composition
-barplot.rcn <- function(input.cells, method="NA"){
-  input.cells <- cells
-  cells_percentages <- input.cells %>%
-                        group_by(rcn_id, GlobalCellType) %>%
-                        summarise(n = n()) %>% mutate(proportion = n * 100 / sum(n))
-  cells_percentages <- as.data.frame(cells_percentages)
-  cells_percentages <- cells_percentages[,-3]
-  
-  GC_order <- c("CancerC1","CancerC2","CancerC3","CancerC4","CancerC5","CancerC6","CancerC7","CancerC8","B.cells","T.regs","CD4.T.cells","CD8.T.cells","CD68.MP","CD15.MY","CD11c.MY","CD163.MP","Other.MY","Other.immune","StromalC1","StromalC2","StromalC3","StromalC4","StromalC5","StromalC6","StromalC7","StromalC8")
-  
-  cells_percentages$GlobalCellType <- factor(cells_percentages$GlobalCellType, levels=GC_order)
-  
-  p <- ggplot(cells_percentages, aes(x=rcn_id,y=proportion, fill=GlobalCellType)) +
-        geom_bar(stat="identity", color="grey20") + theme_classic() +
-        theme(axis.text.x=element_text(size=rel(1.2))) + coord_flip() + 
-        xlab("") + ylab("Proportion") +
-        scale_fill_manual(values = as.character(paletteer_c("grDevices::rainbow", 27)))
-  print(paste0("Saving file in:", paste0(out.folder.name,"RCN_barplot_", method,".png")))
-  ggsave(p, file=paste0(out.folder.name,"RCN_barplot_", method,".png"), width = 14, height = 12, units = "cm")
-  ggsave(p, file=paste0(out.folder.name,"RCN_barplot_", method,".svg"), width = 14, height = 12, units = "cm")
-}
-cells_percentages.m <- cells_percentages %>% 
-                       pivot_wider(names_from = GlobalCellType, values_from = proportion)
-
-cells_percentages.m <- as.data.frame(cells_percentages.m)
-row.names(cells_percentages.m) <- cells_percentages.m[,1]
-cells_percentages.m <- cells_percentages.m[,-1]
-cells_percentages.m[is.na(cells_percentages.m)] <- 0
-cells_percentages.m
+methods.rnc
 ```
 
-#Calculating diversity for each RCN
-```{r}
-#Function for calculating diversity and abundance for each RCN
-heatmap.diversity <- function(input.cells, method="NA"){
-  cells_percentages <- input.cells %>% 
-                          group_by(rcn_id, GlobalCellType) %>% 
-                          summarise(n = n()) %>% mutate(count = n)
-  cells_percentages <- as.data.frame(cells_percentages)
-  cells_percentages <- cells_percentages[,-3]
-  
-  cells_percentages.m <- cells_percentages %>% 
-                         pivot_wider(names_from = GlobalCellType, values_from = count)
-  
-  cells_percentages.m <- as.data.frame(cells_percentages.m)
-  row.names(cells_percentages.m) <- cells_percentages.m[,1]
-  cells_percentages.m <- cells_percentages.m[,-1]
-  cells_percentages.m[is.na(cells_percentages.m)] <- 0
 
-  H <- rev(diversity(cells_percentages.m))
-  cluster_abundances <- as.vector(rev(table(input.cells$rcn_id)))
-  
-  
-  col_fun = colorRamp2(c(min(H), max(H)), c("pink", "darkred"))
-  
-  Rowann <- rowAnnotation(Diversity=H, col = list(Diversity = col_fun),
-                          cells = anno_barplot(cluster_abundances))
-  
-  ht <- Heatmap(matrix(rnorm(l * 3), l), left_annotation = Rowann, cluster_rows = FALSE)
-  
-  svg(paste0(out.folder.name,"Diversity_RCN_heatmap_", method, ".svg"), width = 6, height = 5.4)
-  draw(ht)
-  dev.off()
-}
+```{r}
+set.seed(17)
+
+method1 <- "radious46"
+method2 <- "radious138"
+method3 <- "radious92"
+
+method1.name <- "30microns"
+method2.name <- "90microns"
+method3.name <- "60microns"
+
+id.method1 <- which(methods.rnc == method1)
+id.method2 <- which(methods.rnc == method2)
+id.method3 <- which(methods.rnc == method3)
+
+#Selecting data for each RCN calculation method
+data.method1 <- list.counts[[id.method1]]
+row.names(data.method1) <- paste0(row.names(data.method1),"x1")
+data.method2 <- list.counts[[id.method2]]
+row.names(data.method2) <- paste0(row.names(data.method2),"x2")
+data.method3 <- list.counts[[id.method3]]
+row.names(data.method3) <- paste0(row.names(data.method3),"x3")
+
+data.methods <- rbind(data.method1, data.method2, data.method3)
+data.methods <- data.methods %>% dplyr::select(-Others)
+#data.methods.scaled <- scale(data.methods)
+
+RCN.radious<- factor(c(rep(method1.name, nrow(data.method1)), rep(method2.name, nrow(data.method2)),
+                     rep(method3.name, nrow(data.method3))))
+
+colours <- list(Radius=c(method1.name="green4", method2.name="magenta3", method3.name="khaki"))
+names(colours$Radius) <- c(method1.name, method2.name, method3.name)
+ha = rowAnnotation(Radius=RCN.radious, col =colours)
+
+#col_c <- colorRamp2(c(-1.5, 0, 2, 4), c("#0000FF","grey95", "#F9AAAA", "#EE0000"))
+hmap1 <- Heatmap(data.methods, name="Proportion",
+                row_names_gp = gpar(fontsize = 3), column_names_gp = gpar(fontsize = 7), row_title = NULL,
+                column_title = NULL, row_km = 10,
+                row_names_side = "right", row_dend_side = "right",
+                right_annotation = ha, column_names_rot = 60)
+png(paste0(out.folder.name, "Heatmap_comparison-radius.png"), res=300, width=5.5, height=7, units = "in")
+draw(hmap1)
+dev.off()
+svg(paste0(out.folder.name, "Heatmap_comparison-radius.svg"), width=5.5, height=7)
+draw(hmap1)
+dev.off()
+
 ```
 
 
@@ -151,7 +160,7 @@ heatmap.diversity <- function(input.cells, method="NA"){
 ```{r}
 #Calculating diversity for each RCN
 
-cells_percentages <- cells %>% group_by(patient, rcn_id) %>% summarise(n = n()) %>% mutate(proportion = n * 100 / sum(n))
+cells_percentages.image <- cells %>% group_by(imageid, rcn_id) %>% summarise(n = n()) %>% mutate(proportion = n * 100 / sum(n))
 cells_percentages <- as.data.frame(cells_percentages)
 cells_percentages <- cells_percentages[,-3]
 
