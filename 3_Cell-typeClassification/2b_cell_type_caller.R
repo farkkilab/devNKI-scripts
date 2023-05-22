@@ -1,17 +1,15 @@
 cellTypeCaller <- function(df, gates, gates.class="", folder.name=folder.name, grid.size.xdim=15, hierarchical.trees=TRUE, scaling=TRUE) {
   marker_cols <- unique(unlist(gates))
   mat <- as.matrix(df[, marker_cols])
-  #mat[mat<=0] <- 1 ## Quick fix because of HG0034 showing extreme bad signal. Requires detailed analyses in QC step.
   if (scaling){
     print ("Starting to scale data")
     mat <- scale(mat)
-    mat <- BBmisc::normalize(mat, method='range')
+    mat <- apply(mat, 2, min_max_norm)
   }
   data_FlowSOM <- flowCore::flowFrame(mat)
   
   n.cell.types <- length(gates)
   # set seed for reproducibility
-  
   set.seed(42)
   
   # run FlowSOM
@@ -46,14 +44,9 @@ cellTypeCaller <- function(df, gates, gates.class="", folder.name=folder.name, g
   # Normalize scores matrix between 0 and 1
   gate.scores <- do.call(cbind, gate.scores.by.node)
   nodeID.per.cell <- out$map$mapping[,1]
-  #weights <- BBmisc::normalize(c(table(nodeID.per.cell)), method='range', range = c(0.75, 1))
-  #centered.scores <- apply(gate.scores, 2, function(x) x - mean(x))
   normalized.scores <- BBmisc::normalize(data.frame(gate.scores, check.names = F), method='range')
   
   annotation.scores <- data.frame(normalized.scores, row.names = 1:nrow(normalized.scores))
-  #annotation.scores <- data.frame(normalized.scores, row.names = 1:nrow(normalized.scores))
-  #k <- (n.cell.types+2)^2
-  #k <- nrow(gate.scores)/4
   k <- ceiling(100/(2/ceiling(log(2))))
   print(n.cell.types)
   print(k)
@@ -97,7 +90,6 @@ cellTypeCaller <- function(df, gates, gates.class="", folder.name=folder.name, g
   PlotStars(out, backgroundValues=node.labels)
   tryCatch({dev.off()},error=function(cond){return(NA)})
   
-  #return(df[,c('CellId',gates.class)])
   res1 <- df[,c('CellId',gates.class)]
   rest.return <- list(res1, annotation.scores, nodeID.per.cell)
   return(rest.return)

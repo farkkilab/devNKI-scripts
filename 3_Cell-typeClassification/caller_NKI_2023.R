@@ -55,13 +55,24 @@ celltypes.gating[["Myeloid"]] <- list(
   cell.labels=c("Myeloids1","Myeloids2","Myeloids3"),
   tribus.gate=Myeloid.gate)
 
-################################################################
+######################################################################################
+#Reading information for samples (patient ids) that signal for CK7 and ECadherin needs to be gated
+#This Gating threshold were manually selecting to improve the classification of cancer and immune cells
+to.gate.cancer.cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Gates_ECadherin_CK7_patients.csv",
+                                   sep=",", header = TRUE)
+
+
+
+######################################################################################
 #Reading cores to ignore
 cores2ignore1 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_cores_to_ignore.csv", sep=",")
 cores2ignore2 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_extra-cores_to_ignore.csv", sep = ",", header = TRUE)
+cores2ignore3 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_cores_to_ignore_extra3.csv", sep = ",", header = TRUE)
+
+cores2ignore3 <- cores2ignore3[,c(1,2)]
 cores2ignore2 <- cores2ignore2[,-3]
 colnames(cores2ignore1) <- colnames(cores2ignore2)
-cores2ignore <- rbind(cores2ignore2, cores2ignore1)
+cores2ignore <- rbind(cores2ignore2, cores2ignore1, cores2ignore3)
 
 ####################################################################################################
 ####################################################################################################
@@ -79,7 +90,7 @@ input.suffix <- "_ROIs-label.csv"
 ###Input and output folders
 project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
 input.folder <- "Cell-segment2_QC/"
-outputfolders <- "Tribus_Cell-segment_202302/"
+outputfolders <- "Tribus_Cell-segment_202306/"
 segmentation.suffix <- "_Probabilities_cytomask2" #This is to make it compatible with Napary
 coresCoordsPath <- "dearray/cropCoords/"
 coresCoordsSuffix <- "_cropCoords.csv"
@@ -91,28 +102,32 @@ files <- files[grepl(pattern = input.prefix, x=files)]
 files <- files[grepl(pattern = input.suffix, x=files)]
 set.seed(1) #For reproducibility 
 
-for (f in files[9:10]){
+
+for (f in files){
         print(paste0("Analyzing file: ", f))
         ########################Do this for every file #########################################
         print("Reading input data")
         data <- read.csv(f, sep=',', stringsAsFactors = F, header=TRUE)
-        sample <- gsub(input.prefix, '',basename(f))
-        sample <- gsub(input.suffix, '',sample)
+        slide <- gsub(input.prefix, '',basename(f))
+        slide <- gsub(input.suffix, '',slide)
         
-        cores2ignore.slide <- cores2ignore[cores2ignore$Slide %in% sample,]
-        cores.patient <- cycif2samples[cycif2samples$cycif.slide %in% sample,]
+        #List of cores by tumor sample (patient.id)
+        cores.patient <- cycif2samples[cycif2samples$cycif.slide %in% slide,]
         cores.patient$cycif.core.id <- as.numeric(gsub("core","",cores.patient$cycif.core.id))
-        cores.patient <- cores.patient[!cores.patient$cycif.core.id %in% cores2ignore.slide$Core,]
         
         #There are controls that should not be used for the normalization
+        #Ignoring cores that should not be used for subsequent analysis
+        cores2ignore.slide <- cores2ignore[cores2ignore$Slide %in% slide,]
+        cores.patient <- cores.patient[!cores.patient$cycif.core.id %in% cores2ignore.slide$Core,]
+        
         cores.to.ignore <- unique(data$CoreId[which(!data$CoreId %in% cores.patient$cycif.core.id)])
         if (length(cores.to.ignore) > 0){
            print("Next cores are ignored:")
-           print(cores.ignored)
-           data <- data[which(data$CoreId %in% cores.patient.int),]
+           print(cores.to.ignore)
+           data <- data[which(data$CoreId %in% cores.patient$cycif.core.id),]
         }
         
-        outout.folder.name <- paste0(project.folder, "/", sample, "/", outputfolders)
+        outout.folder.name <- paste0(project.folder, "/", slide, "/", outputfolders)
         dir.create(outout.folder.name)
 
         ############################## Some QCs before gating ###################################
@@ -156,19 +171,30 @@ for (f in files[9:10]){
         heatmap(cor(data.filtered[,colnames.interest2]))
         dev.off()
         
-        ##########Normalization of CK7 and ECadherin by patient
-        ##########Then further detection of cancer cells using a two Gaussian mixture approach
-        chanels.global.gates <- unique(unlist(global.gates)) 
-        chanels.global.gates.non.cancer <- chanels.global.gates[!chanels.global.gates %in% c("CK7","ECadherin")]
-        norm.data.firts.caller <- normalize.by.patient(data.filtered, patientIDstable = cores.patient, 
-                                    other.chanels.norm = chanels.global.gates.non.cancer)
+        ###### Identification of cancer cells according to CK7, ECadherin, Vimentin and aSMA signal normalized by sample (patient) #############
+        ##########Then further detection of cancer cells using a two Gaussian mixture approach for some samples
+        ##########For some other samples with atypical signal, the signal was gated according to CK7, ECadherin, Vimentin and aSMA
+        cores.to.gate <- cores.patient[cores.patient$patient %in% to.gate.cancer.cells$Patient,"cycif.core.id"]
+        patients.to.gate <- cores.patient[cores.patient$patient %in% to.gate.cancer.cells$Patient,]
+        patients.to.gaussian <- cores.patient[!cores.patient$patient %in% to.gate.cancer.cells$Patient,]
+        data.filtered.to.gate <- data.filtered[data.filtered$CoreId %in% cores.to.gate,]
+        data.filtered.to.gaussian <- data.filtered[!data.filtered$CoreId %in% cores.to.gate,]
+        cancer.labels.gaussian <- gaussian.mix.cancer.cell.detection(data.filtered.to.gaussian, patientIDstable = patients.to.gaussian)
+        cancer.labels.gate <- gating.cancer.cell.detection(data.filtered.to.gate, patientIDstable = patients.to.gate,
+                                                               gating.file=to.gate.cancer.cells)
+        is.Cancer.cell <- rep("NA", nrow(data.filtered)) 
+        data.filtered.cancer.label <- cbind(data.filtered[,c(1:3)], is.Cancer.cell)
+        data.filtered.cancer.label[data.filtered.cancer.label$CoreId %in% cores.to.gate, "is.Cancer.cell"] <- cancer.labels.gate$is.Cancer.cell
+        data.filtered.cancer.label[!data.filtered.cancer.label$CoreId %in% cores.to.gate, "is.Cancer.cell"] <- cancer.labels.gaussian$is.Cancer.cell
+        rm(is.Cancer.cell, cancer.labels.gate, cancer.labels.gaussian, data.filtered.to.gate, data.filtered.to.gaussian)
         
-        #####Trim channels to 0.999 & 0.001 percentile
+        
+        #####For all the dataset trim channels to 0.999 & 0.001 percentile
         data.filtered.trim <- z.trimming(data.filtered[,cols])
         data.filtered[,cols] <- data.filtered.trim[[1]]
         
-        #data.filtered.pat <- merge(data.filtered,cores.patient, by.x="CoreId", by.y="cycif.core.id")
-        data.filtered.non.cancer <- data.filtered[which(norm.data.firts.caller$is.Cancer.cell == "NO"),]
+        ###Selecting non-cancer cells
+        data.filtered.non.cancer <- data.filtered[which(data.filtered.cancer.label$is.Cancer.cell == "NO"),]
         
         #Detecting cells with an expression of all channels lower than the median channel intensity per slide
         #Ignoring those detected cells and saving those in vector any.high.expression
@@ -177,14 +203,14 @@ for (f in files[9:10]){
         colnames.global <- colnames.global[which(!colnames.global %in% 'Eccentricity')]
         data.filtered.non.cancer.scaled <- as.matrix(scale(data.filtered.non.cancer[,colnames.global]))
         quantile.by.channel <- sapply(colnames.global,function(x){
-          quantile(data.filtered.non.cancer.scaled[,x],0.5)
+          quantile(data.filtered.non.cancer.scaled[,x],0.25)
         })
         any.high.expression <- sapply(1:nrow(data.filtered.non.cancer.scaled), function(x){
           any(data.filtered.non.cancer.scaled[x,] >= quantile.by.channel)
         })
         data.filtered.non.cancer.sel <- data.filtered.non.cancer[which(any.high.expression),]
         
-        ############  Tribus, cell-type call (aka gating )########################
+        ############  Tribus, cell-type call ########################
         ####Cell-type calling for non-cancer cells ###########
         print("Running classifier, first gate")
         gating_results <- cellTypeCaller(data.filtered.non.cancer.sel, global.gates, "GlobalCellType", folder.name = outout.folder.name,
@@ -199,16 +225,15 @@ for (f in files[9:10]){
         GlobalCellTypes <- rep("Others",nrow(data.filtered.non.cancer))
         GlobalCellTypes[which(any.high.expression)] <- globalTypes$GlobalCellType
         
+        #Gatting B-cells
         GlobalCellTypes[ which(as.vector(scale(data.filtered.non.cancer$CD20)) >= 3)] <- "B.cells"
-        
         
         #Merging results with previous cancer-cell assignment
         data.filtered.types <- data.filtered
         data.filtered.types$GlobalCellType <- NA
-        data.filtered.types$GlobalCellType[which(norm.data.firts.caller$is.Cancer.cell == "YES")] <- "Cancer"
-        data.filtered.types$GlobalCellType[which(norm.data.firts.caller$is.Cancer.cell == "NO")] = GlobalCellTypes
+        data.filtered.types$GlobalCellType[which(data.filtered.cancer.label$is.Cancer.cell == "YES")] <- "Cancer"
+        data.filtered.types$GlobalCellType[which(data.filtered.cancer.label$is.Cancer.cell == "NO")] = GlobalCellTypes
         
-        #data.filtered.types   <- cbind(data.filtered, globalTypes)
         print("Cell types proportions found at global gate:")
         print((table(data.filtered.types$GlobalCellType) / nrow(data.filtered.types)) * 100)
         
@@ -287,7 +312,7 @@ for (f in files[9:10]){
         data.raw.types$out_of_core <- NA #Label if the cell correspond to the current core
 
         percentages_celltypes <- round(table(data.raw.types$GlobalCellType) * 100 / nrow(data.raw.types),4)
-        print(paste0("Final cell types proportions for ", sample, ":"))
+        print(paste0("Final cell types proportions for ", slide, ":"))
         print(percentages_celltypes)
 
         data.raw.types.plots <- data.raw.types[!data.raw.types$GlobalCellType %in%  c("LostCell", "Others", "LowDapi", "InsideROI"),]
@@ -316,7 +341,7 @@ for (f in files[9:10]){
                 names(core)[which(names(core) == "CellId")] <- "Cellid"
                 names(core)[which(names(core) == "CoreId")] <- "Core_Names"
                 #Calculating the distance of each cell to the center of the core
-                cropbox = read.table(file=paste0(project.folder, sample, "/", coresCoordsPath, core.id, coresCoordsSuffix), sep=",")
+                cropbox = read.table(file=paste0(project.folder, slide, "/", coresCoordsPath, core.id, coresCoordsSuffix), sep=",")
                 center.cropBox = data.frame(x=(cropbox$V3 - cropbox$V1)/2,
                                             y=(cropbox$V4 - cropbox$V2)/2)
                 distances = sqrt((core$X_position - center.cropBox$x)^2 + (core$Y_position - center.cropBox$y)^2)
@@ -333,56 +358,5 @@ for (f in files[9:10]){
         data.raw.types <- data.raw.types[data.raw.types$GlobalCellType != "InsideROI",]
         data.raw.types <- data.raw.types[data.raw.types$GlobalCellType != "LostCell",]
 
-        write.table(data.raw.types, file=paste0(outout.folder.name, sample, "_cellTypes.csv"), sep=",", row.names=FALSE)
+        write.table(data.raw.types, file=paste0(outout.folder.name, slide, "_cellTypes.csv"), sep=",", row.names=FALSE)
 }
-
-
-#####################################################################################################################################################################
-#####################################################################################################################################################################
-#####################################################################################################################################################################
-#####################################################################################################################################################################
-#####################################################################################################################################################################
-#####################################################################################################################################################################
-
-#Probably useful code for future development
-
-
-
-# L <- data.filtered.types
-# L.cancer <- L[L$GlobalCellType == "Cancer",]
-#
-#
-# png(filename = paste0("CK7-ECadherin_",sample,"-immune-cells.png"))
-# par(mfrow = c(1, 2))
-# plot(density(cells.for.gate$CK7), main="CK7 - Immune cells")
-# plot(density(cells.for.gate$ECadherin), main="ECadherin - Immune cells")
-# dev.off()
-#
-# png(filename = paste0("CK7-ECadherin_",sample,"-immune-cells.png"))
-# par(mfrow = c(1, 2))
-# plot(density(L[L$GlobalCellType == "Cancer","CK7"]), main="CK7 - Cancer cells")
-# plot(density(L[L$GlobalCellType == "Cancer","ECadherin"]), main="ECadherin - Cancer cells")
-# dev.off()
-#
-#
-#
-#
-# ggsave(fig, filename=paste0("Density_CK7-Ecadherin_",sample, "-", names.data.set[i], ".png"), width = 18, height = 12, units = "cm")
-#
-# cols.selected <- intersect(intersect(intersect(intersect(cols.1,cols.2),cols.3), cols.4),cols.5)
-# cells.for.gate.data <- cells.for.gate.data[,cols.selected]
-# D <- scale(as.matrix(cells.for.gate.data))
-# cor.D <- cor(D)
-# heatmap(cor.D)
-# corrplot(cor.D, order="hclust")
-# prc = prcomp(t(D))
-# plot(prc$x[,1], prc$x[,2], col = "white", xlab = "PC1", ylab = "PC2")
-# text(prc$x[,1], prc$x[,2], labels = colnames(D))
-# plot(prc$x[,2], prc$x[,3], col = "white", xlab = "PC2", ylab = "PC3")
-# text(prc$x[,2], prc$x[,3], labels = colnames(D))
-
-
-# #Find cancer cells if those are from the same node
-# cells.node.channels <- cbind(data.filtered.types, nodes.by.cell)
-# rows.cancer <- Immune.Types2[which(Immune.Types2$Immune.Types == "Cancer"),"Row_number"]
-# cancer.inside.immune <- cells.node.channels[which(cells.node.channels$Row_number %in% rows.cancer),]
