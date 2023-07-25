@@ -499,7 +499,7 @@ if __name__ == '__main__':
 
     freeze_support()
 
-    names = ['EXPERIMENTS_FILE_NAME.csv'] 
+    names = ['EXPERIMENTS_FILE_NAME.csv', ...] 
 
     df = pd.read_csv("DATASET_FILENAME.csv")
     df['Molecular.profile2'] = df['Molecular.profile2'].replace('BRCAmut/met', 'BRCAmutmet')
