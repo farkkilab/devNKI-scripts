@@ -119,6 +119,24 @@ heatmap.diversity <- function(input.cells, method="NA"){
   dev.off()
 }
 
+##############Just calculate the proportions of cells by global.cell.type##################
+counts.by.GlobalCellType <- function(input.cells){
+  cells_percentages <- input.cells %>% 
+    group_by(rcn_id, GlobalCellType) %>% 
+    summarise(n = n()) %>% mutate(count = n / sum(n))
+    #summarise(n = n()) %>% mutate(count = n)
+  cells_percentages <- as.data.frame(cells_percentages)
+  cells_percentages <- cells_percentages[,-3]
+  
+  cells_percentages.m <- cells_percentages %>% 
+    pivot_wider(names_from = GlobalCellType, values_from = count)
+  
+  cells_percentages.m <- as.data.frame(cells_percentages.m)
+  row.names(cells_percentages.m) <- cells_percentages.m[,1]
+  cells_percentages.m <- cells_percentages.m[,-1]
+  cells_percentages.m[is.na(cells_percentages.m)] <- 0
+  return(cells_percentages.m)
+}
 
 
 ##############Barplot for the RCN composition##################

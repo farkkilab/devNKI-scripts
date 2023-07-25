@@ -12,7 +12,7 @@ global.gates[["Lymphoid2"]] <- list(
 #               Pos=c('CD20'),
 #               Neg=c('Vimentin','aSMA'))
 global.gates[["Myeloid1"]] <- list(
-              Pos=c('CD163','CD11b'),
+              Pos=c('CD163','CD11b','CD68'),
               Neg=c('Vimentin','aSMA'))
 global.gates[["Myeloid2"]] <- list(
               Pos=c('CD207','CD11b'),
@@ -48,7 +48,7 @@ immune.gates[["Lymphoids2"]] <- list(
   Pos=c('CD4','CD3d'),
   Neg=c('CD11c','CD163'))
 immune.gates[["Myeloids1"]] <- list(
-  Pos=c('CD163'),
+  Pos=c('CD163','CD68'),
   Neg=c('CD3d'))
 immune.gates[["Myeloids2"]] <- list(
    Pos=c('CD11c'),
@@ -64,12 +64,15 @@ immune.gates[["Other.immune"]] <- list(
 Lymphoid.gate <- list()
 Lymphoid.gate[["CD4.T.cells"]] <- list(
   Pos=c('CD4'),
-  Neg=c('FOXP3'))
+  Neg=c('FOXP3','PD1'))
 Lymphoid.gate[["T.regs"]] <- list(
   Pos=c('FOXP3','CD4'),
   Neg=c())
 Lymphoid.gate[["CD4.CD45RO.T.cells"]] <- list(
   Pos=c('CD45RO'),
+  Neg=c('FOXP3'))
+Lymphoid.gate[["CD4.exhausted.T.cells"]] <- list(
+  Pos=c('PD1'),
   Neg=c('FOXP3'))
 
 cd8.gates <- list()
@@ -94,9 +97,9 @@ Myeloid.gate[["CD207.MY"]] <- list(
 Myeloid.gate[["CD11c.MY"]] <- list(
   Pos=c('CD11c'),
   Neg=c('CD163'))
-# Myeloid.gate[["CD15.MY"]] <- list(
-#   Pos=c('CD15'),
-#   Neg=c('MHCII')) #CD68 was highly correlated with CD15
+Myeloid.gate[["CD68.MP"]] <- list(
+   Pos=c('CD68'),
+   Neg=c('CD163','CD11c','CD207'))
 Myeloid.gate[["Other.MY"]] <- list(
    Pos=c(),
    Neg=unique(unlist(lapply(Myeloid.gate, function(x) x$Pos)[!grepl("Other.MY",names(Myeloid.gate))])))

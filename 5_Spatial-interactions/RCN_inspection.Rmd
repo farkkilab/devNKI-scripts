@@ -60,7 +60,7 @@ RCN.c.ids.all <- sapply(RCN.annotations$RCN_name, function(x){
 RCN.annotations$RCN.id.collapsed <- RCN.c.ids.all
 
 RCN.annotations$RCN_id <- as.integer(gsub("RCN","",RCN.annotations$RCN_id))
-RCN.annotations %>% arrange(desc(RCN_id))
+unique(RCN.annotations$RCN_name)
 ```
 
 

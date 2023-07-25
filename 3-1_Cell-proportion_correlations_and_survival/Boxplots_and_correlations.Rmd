@@ -1,0 +1,78 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+#Loading packages
+```{r}
+install.packages("ggsignif") 
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+```
+
+
+
+#Reading input
+```{r}
+#Reading input cell proportion table by patient
+patient.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Cell-proportions_Heatmaps2/tCycif_cell-proportions-patients.csv", sep=",", header=TRUE)
+
+#Reading clinical info
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.csv", sep=",", header = TRUE)
+
+out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_Proportions_comparisons/"
+```
+
+#Merging clinical info and data
+```{r}
+interesting.clin.columns <- c("TnumberAVL","therapy_sequence","Molecular_profile",
+                              "centre","refage","incyear")
+
+clinical.info.sel <- clinical.info %>% select(interesting.clin.columns)
+
+patient.cell.prop.clin <- merge(patient.cell.prop, clinical.info.sel,
+                                by.x = "patient", by.y="TnumberAVL")
+
+#Removing patients with Unknown Molecular profile
+patient.cell.prop.clin <- patient.cell.prop.clin[patient.cell.prop.clin$Molecular_profile !="",]
+
+patient.cell.prop.clin$Molecular_profile[patient.cell.prop.clin$Molecular_profile == "BRCAmut OR hypermethylation"] <- "BRCAm.profile"
+
+patient.cell.prop.clin$Molecular_profile[patient.cell.prop.clin$Molecular_profile == "BRCAness"] <- "Non-BRCAmut.HRD"
+
+patient.cell.prop.clin$Molecular_profile[patient.cell.prop.clin$Molecular_profile == "CCNE1"] <- "CCNE1.amp"
+
+patient.cell.prop.clin$Molecular_profile[patient.cell.prop.clin$Molecular_profile == "BRCAness & CCNE1"] <- "Double.class"
+
+levels.molecular <- c("BRCAm.profile", "Non-BRCAmut.HRD", "Double.class", "CCNE1.amp", "Other")
+
+patient.cell.prop.clin$Molecular_profile <- factor(patient.cell.prop.clin$Molecular_profile,
+                                                   levels = levels.molecular)
+```
+
+#Boxplots for each celltype
+```{r}
+columns.to.test <- colnames(patient.cell.prop.clin)[grep("MAX", colnames(patient.cell.prop.clin))]
+
+columns.to.test <- columns.to.test[which(columns.to.test !="MAX.Others" & columns.to.test !="MAX.Cancer")]
+
+box.plots <- lapply(columns.to.test, function(x){
+  max.y <- quantile(patient.cell.prop.clin[,x], 0.99)
+  plot.tittle <- gsub("MAX.","",x)
+  p <- ggplot(patient.cell.prop.clin, aes_string(x="Molecular_profile", y=x, color="Molecular_profile")) +
+    geom_point(position= position_jitter(width= .2), size= 2, alpha = 0.5) +
+    geom_boxplot(fill=NA, outlier.shape = NA) + theme_bw() +
+    labs(title = plot.tittle) + ylim(0,max.y) + ylab("Proportion in core") + xlab("Molecular profile") +
+    theme(plot.title = element_text(face="bold", hjust=0.5),
+          legend.position="none",
+          axis.text.x = element_blank())
+  return(p)
+})
+ggsave(file=paste0(out.put.folder,"Boxplots_cellProportions-MoleclularMarkers.pdf"),
+       arrangeGrob(grobs = box.plots, ncol = 4), height = 9, width = 9)
+
+```
+
+
+
