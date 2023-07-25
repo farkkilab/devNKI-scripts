@@ -40,7 +40,7 @@ class Model:
 
         self.rng = np.random.RandomState(0)
 
-        # Data pre-processing
+        # Variables for data pre-processing
         self.df = df
 
         # from experiments.csv:
@@ -49,6 +49,7 @@ class Model:
         # Set the output directory and filename for the figures
         self.output_dir = os.path.dirname(os.path.abspath(__file__))
 
+        # Collect required variables from csv file
         self.features = channels.split(",") # channels column
         self.types_of_cells = cells # types_of_cells column
         self.target = target # classes_types column
@@ -59,10 +60,10 @@ class Model:
         self.features_for_ouliers = channels_to_outliers.split(",")
         self.features_to_scale = channels_to_scale.split(",")
 
-        # Log transformation 
+        # Define transformation type. Available types: LOG, LOG2, BOXCOX
         self.transformation = 'LOG2' 
         
-        # Remove outliers : add morphological features too
+        # Define how to remove outliers. Available options: trim_by_slide & remove
         self.operation = 'remove'
         
         # Scale data
@@ -70,10 +71,9 @@ class Model:
         # MinMaxScaler scales the data to be within a specific range, usually between 0 and 1
         # StandardScaler scales the data to have a mean of zero and a standard deviation of one
         self.scaler_type = scaler # Scaling type
-        self.scale_by = 'slide'
+        self.scale_by = 'slide' # Define how to scale. Available options: whole, patient, slide
 
-        # Machine learning
-
+        # Variables for machine learning step
         self.categorical_variables = ['Molecular.profile2', 'therapy_sequence']
         self.best_params = None
         self.RF = RandomForestClassifier(random_state = self.rng, class_weight = 'balanced')
@@ -81,6 +81,7 @@ class Model:
         # Define the evaluation procedure
         self.cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=3, random_state=self.rng)
         
+        # Save results 
         self.train_results = None
         self.train_time = None
         self.predictions_train = None
@@ -182,6 +183,7 @@ class Model:
         unique_patients = self.df['patient'].unique()
         print("Before thresholding number of patients: ", len(unique_patients))
         
+        # Remove patients with too few cells for each chosen cell type
         for cell_type in cell_types:
             # Group df by patient and get the size of each group
             grouped_df = self.df[self.df['GlobalCellType'] == cell_type].groupby('patient').size()
@@ -198,7 +200,7 @@ class Model:
         unique_patients = self.df['patient'].unique()
         print("After thresholding number of patients: ", len(unique_patients))
 
-        # Leave only needed cell types in df
+        # Leave only chosen cell types in df
         if self.types_of_cells == "Non-cancer":
             self.df = self.df[~self.df["GlobalCellType"].isin(['Others', 'Cancer'])]
 
@@ -350,7 +352,6 @@ class Model:
         # self.test_results['auc_test'] = roc_auc_score(y_test, probas_test[:,1])
         
         # Plots
-
         classes_on_plot = self.label_encoder_dict['Molecular.profile2']['label_codes']
 
         # Precision-recall
@@ -498,9 +499,9 @@ if __name__ == '__main__':
 
     freeze_support()
 
-    names = ['non_cancer_experiments.csv'] 
+    names = ['EXPERIMENTS_FILE_NAME.csv'] 
 
-    df = pd.read_csv("~/full_dataset.csv")
+    df = pd.read_csv("DATASET_FILENAME.csv")
     df['Molecular.profile2'] = df['Molecular.profile2'].replace('BRCAmut/met', 'BRCAmutmet')
 
     print(df.head(5))
