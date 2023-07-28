@@ -412,11 +412,6 @@ class Model:
         # Run cross-validated recursive feature elimination to select the most predictive features
         rfecv.fit(X_train, y_train)
         
-        # Calculate feature importances using mean decrease in impurity (Gini impurity)
-        
-        # "importances" here will represent the feature importances based on Gini impurity
-        importances = rfecv.estimator_.feature_importances_
-        
         # Get the support mask indicating which features were selected by RFECV
         support = rfecv.support_
 
@@ -427,6 +422,9 @@ class Model:
 
         print("Important features: ", important_features)
         print("Eliminated features: ", eliminated_features)
+
+        # Calculate feature importances using mean decrease in impurity (Gini impurity)
+        importances = rfecv.estimator_.feature_importances_
         
         # Plot
         # Create dictionary with important feature names as keys and importances as values
