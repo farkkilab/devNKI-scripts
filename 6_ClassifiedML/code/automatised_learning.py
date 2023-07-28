@@ -412,7 +412,7 @@ class Model:
         # Run cross-validated recursive feature elimination to select the most predictive features
         rfecv.fit(X_train, y_train)
         
-        # Get the support mask indicating which features were selected by RFECV
+        # Get the support mask indicating which features were selected by RFECV, where True values in the mask correspond to important features.
         support = rfecv.support_
 
         # Get the list of most predictive and eliminated features
