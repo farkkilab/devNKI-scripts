@@ -97,7 +97,6 @@ class Model:
     def transform_df(self):
 
         if self.transformation == 'LOG':
-            # Log-transform the features
             self.df.loc[:, self.features_to_transform] = np.log(self.df.loc[:, self.features_to_transform] + 1)
 
         elif self.transformation == 'LOG2':
@@ -117,22 +116,30 @@ class Model:
             slides = self.df['cycif.slide'].unique()
         
             for slide in slides:
+                # Create a mask to filter data belonging to the current slide
                 slide_mask = self.df['cycif.slide'] == slide
+                
                 for feature in self.features_for_ouliers:
                     percentiles = np.percentile(df.loc[slide_mask, feature], [1, 99])
+                    
+                    # Replace values below the 1st percentile with the 1st percentile value
                     self.df.loc[slide_mask & (self.df[feature] < percentiles[0]), feature] = percentiles[0]
+                    # Replace values above the 99th percentile with the 99th percentile value
                     self.df.loc[slide_mask & (self.df[feature] > percentiles[1]), feature] = percentiles[1]
 
         elif self.operation == 'remove':
 
             df_sub = self.df.loc[:, self.features_for_ouliers]
 
+            # Identify outliers using the 1st (0.01) and 99th (0.99) percentiles for each feature
+            # For each data point, 'lim' will be True if the value is within the range [0.01, 0.99], otherwise False
             lim = np.logical_and(df_sub < df_sub.quantile(0.99, numeric_only=False),
                              df_sub > df_sub.quantile(0.01, numeric_only=False))
 
-            # replace outliers with nan
+            # Data points outside the range [0.01, 0.99] will be replaced with NaN
             self.df.loc[:, self.features_for_ouliers] = df_sub.where(lim, np.nan)
-            # drop rows with NaN in numerical columns
+            
+            # Drop rows with NaN in numerical columns
             self.df.dropna(subset=self.features_for_ouliers, inplace=True)
         
         else: 
@@ -141,32 +148,37 @@ class Model:
     def scaler(self, df):
     
         # Make sure that features are numerical!
-
+        
+        # Get a scaler from the dictionary of supported scaler types
         scaler = self.scaler_dict.get(self.scaler_type)
 
         if scaler is None:
             raise ValueError(f"Invalid scaler type: {self.scaler_type}")
         
+        # Scale the data according to the specified scaler type
         data = scaler.fit_transform(df)
         
         return data
     
     def scaling(self):
-        
+ 
         if self.scale_by not in ['whole','patient', 'slide']:
             raise ValueError(f"Invalid order: {self.scale_by}")
         
         if self.scale_by == 'patient':
             patients = self.df['patient'].unique()
+            # Iterate through each unique patient ID and scale the specified features for each patient separately
             for patient in patients:
                 self.df.loc[self.df['patient'] == patient, self.features_to_scale] = self.scaler(self.df.loc[self.df['patient'] == patient, self.features_to_scale])
         
         elif self.scale_by == 'slide':
             slides = self.df['cycif.slide'].unique()
+            # Iterate through each unique slide and scale the specified features for each slide separately
             for slide in slides:
                 self.df.loc[self.df['cycif.slide'] == slide, self.features_to_scale] = self.scaler(self.df.loc[self.df['cycif.slide'] == slide, self.features_to_scale])
         
         elif self.scale_by == 'whole':
+            # Scale the specified features on the entire DataFrame
             self.df.loc[self.features_to_scale] = self.scaler(self.df.loc[self.features_to_scale])
         
         else:
@@ -232,9 +244,19 @@ class Model:
         # Encode categorical variables 
         self.label_encoder_dict = {}
         for variable in self.categorical_variables:
+            
             label_encoder = LabelEncoder()
+            
+            # Convert the values of the current categorical variable to strings and encode them
+            # The encoded values will replace the original values in the DataFrame
             self.df.loc[:, variable] = label_encoder.fit_transform(self.df.loc[:, variable].astype('str').values)
-            self.label_encoder_dict[variable] = {'label_codes': label_encoder.classes_.tolist(), 'label_values': label_encoder.transform(label_encoder.classes_).tolist()}
+            
+            # Save the encoding results for the current variable in 'label_encoder_dict'
+            # The dictionary will store the unique class labels and their corresponding encoded values
+            self.label_encoder_dict[variable] = {
+                'label_codes': label_encoder.classes_.tolist(), 
+                'label_values': label_encoder.transform(label_encoder.classes_).tolist()
+            }
 
     def prep_train_test_data(self):
     
@@ -275,7 +297,7 @@ class Model:
             print("Standard deviation of cross-validated scores:", np.std(scores))
             return -np.mean(scores)
         
-        # Perform Bayesian search
+        # Perform Bayesian search on defined hyperparameters search space 
         start = time() # Get start time
         n_calls = 30
         self.train_results = gp_minimize(evaluate_model, space, random_state=self.rng, n_random_starts=5, n_calls = n_calls)
@@ -318,36 +340,36 @@ class Model:
            - y_test: income testing set
         '''
         
-        # Fit the learner to the training data
+        # Training step: Fit the learner to the training data
         self.RF.fit(X_train, y_train)
             
         # Get the predictions on the training set(X_train),
-        #then get predictions on the test samples(X_test) using .predict()
+        # then get predictions on the test samples(X_test)
         self.predictions_train = self.RF.predict(X_train)
+        # Test step:
         self.predictions_test = self.RF.predict(X_test)
         
-        # Convert predictions_test to a pandas series
+        # Save the predictions of X_test as df:
+        # 1. Convert predictions_test to a pandas series
         predictions_series = pd.Series(self.predictions_test, name='predicted_label')
-
-        # Convert MultiIndex to a flat index in X_test
+        # 2. Convert MultiIndex to a flat index in X_test
         X_test_flat = X_test_full.reset_index(drop=True)
-
-        # Concatenate X_test_flat and predictions_series along axis=1 to receive df of test set predictions 
+        # 3. Concatenate X_test_flat and predictions_series along axis=1 to receive df of test set predictions 
         self.predictions_df = pd.concat([X_test_flat, predictions_series], axis=1)
                 
         # Compute balanced accuracy on training samples
         self.test_results['balanced_acc_train'] = balanced_accuracy_score(y_train, self.predictions_train)
             
-        # Compute accuracy on test set using balanced_accuracy_score()
+        # Compute balanced accuracy on the test set
         self.test_results['balanced_acc_test'] = balanced_accuracy_score(y_test, self.predictions_test)
         
-        # Compute F1-score on training samples
+        # Compute weighted F1-score on training samples
         self.test_results['f1_train'] = f1_score(y_train, self.predictions_train, average='weighted')
             
-        # Compute F1-score on the test set
+        # Compute weighted F1-score on the test set
         self.test_results['f1_test'] = f1_score(y_test, self.predictions_test, average='weighted')
         
-        # Compute AUC on test set
+        # Compute AUC on the test set if needed
         probas_test = self.RF.predict_proba(X_test) # 2D array with number columns as target classes, where each column contains the predicted probabilities of belonging to the corresponding target class.
         # self.test_results['auc_test'] = roc_auc_score(y_test, probas_test[:,1])
         
@@ -377,6 +399,7 @@ class Model:
         '''
         
         # Define cross-validated recursive feature elimination 
+        # RFECV automatically selects the best number of features based on the provided scoring function of accuracy
         rfecv = RFECV(
             estimator=self.RF,
             min_features_to_select=5,
@@ -386,12 +409,18 @@ class Model:
             cv=self.cv,
         )
         
-        # Run cross-validated recursive feature elimination to select most predictive features
+        # Run cross-validated recursive feature elimination to select the most predictive features
         rfecv.fit(X_train, y_train)
         
-        # Define most predictive and least predictive features based on received importances
+        # Calculate feature importances using mean decrease in impurity (Gini impurity)
+        
+        # "importances" here will represent the feature importances based on Gini impurity
         importances = rfecv.estimator_.feature_importances_
+        
+        # Get the support mask indicating which features were selected by RFECV
         support = rfecv.support_
+
+        # Get the list of most predictive and eliminated features
         features = X_train.columns
         eliminated_features = list(features[~support])
         important_features = features[support]
@@ -503,9 +532,8 @@ if __name__ == '__main__':
 
     df = pd.read_csv("DATASET_FILENAME.csv")
     df['Molecular.profile2'] = df['Molecular.profile2'].replace('BRCAmut/met', 'BRCAmutmet')
-
-    print(df.head(5))
-
+    
+    # Get the number of available CPU cores for parallel processing
     max_workers= mp.cpu_count()
 
     for name in names:
@@ -514,14 +542,18 @@ if __name__ == '__main__':
 
         print(exps.head(1))
 
+        # Use ProcessPoolExecutor for parallel execution of multiple experiments
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
 
             print("Start of experiment")
-
+            
+            # Perform multiple machine learning runs in parallel using executor.map()
+            # Each experiment's details are passed to the perform_ml_run function
             results = list(executor.map(perform_ml_run, [(d['experiment'], d['channels'], d['channels_to_transform'], d['channels_to_outliers'], d['channels_to_scale'], d['types_of_cells'], d['classes_column'], d['classes_types'], d['therapies'], d['scaling_type'], d['best_parameters'], d['balanced_acc_train'], d['balanced_acc_test'], d['f1_train'], d['f1_test'], d['most_predictive_features'], d['eliminated_features'], name, exps, df) for i, d in exps.iterrows()]))
 
             executor.shutdown()
 
+        # Update the experiment DataFrame with the results obtained from the machine learning runs
         for result in results:
             exp_name = result['exp_name']
             exps.loc[exps['experiment'] == exp_name, 'best_parameters'] = str(result['best_parameters'])
@@ -532,7 +564,7 @@ if __name__ == '__main__':
             exps.loc[exps['experiment'] == exp_name, 'most_predictive_features'] = str(result['most_predictive_features'])
             exps.loc[exps['experiment'] == exp_name, 'eliminated_features'] = str(result['eliminated_features'])
 
-        # Save the updated DataFrame to CSV
+        # Save the updated DataFrame to experiments file
         exps.to_csv(name, index=False)
 
         print(exps.head(5))
