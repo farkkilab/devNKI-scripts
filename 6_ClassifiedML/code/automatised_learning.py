@@ -282,7 +282,7 @@ class Model:
         '''
         inputs:
            - X_train: features training set
-           - y_train: income training set
+           - y_train: classes labels of training set
         '''
 
         # Define hyperparameters search space 
@@ -334,10 +334,10 @@ class Model:
         '''
         inputs:
            - X_train: features training set
-           - y_train: income training set
-           - X_test_full: features testing set with saved patient and slide
+           - y_train: classes labels of training set
+           - X_test_full: features testing set with saved patient and slide IDs
            - X_test: features testing set
-           - y_test: income testing set
+           - y_test: classes labels of testing set
         '''
         
         # Training step: Fit the learner to the training data
@@ -394,8 +394,8 @@ class Model:
     def eliminate_features(self, X_train, y_train):
         '''
         inputs:
-        - X_train: features training set
-        - y_train: income training set
+        - X_train: training set
+        - y_train: training set
         '''
         
         # Define cross-validated recursive feature elimination 
