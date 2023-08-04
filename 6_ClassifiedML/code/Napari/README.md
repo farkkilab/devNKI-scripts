@@ -1,4 +1,4 @@
-# RF-based pipeline for binary classification 
+# Napari code for visualisation of cells' predictions 
 
 Files:
 
