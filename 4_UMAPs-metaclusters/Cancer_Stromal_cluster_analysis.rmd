@@ -3,7 +3,6 @@ title: "R Notebook"
 output: html_notebook
 ---
 
-
 ```{r}
 library(corrplot)
 library(RColorBrewer)
@@ -25,10 +24,11 @@ source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/qc_
 source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/cell_type_caller_functions.R")
 
 project.path <- "D:/users/fperez/NKI_TMAs_AF/"
-outout.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_April/"
-tribus.subfolder <- "Tribus_Cell-segment_202305"
+outout.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November"
+tribus.subfolder <- "Tribus_Cell-segment_202311"
 celltypes.file.suffix = "_cellTypes.csv"
 ```
+
 #Reading clinical info
 
 ```{r}
@@ -43,9 +43,8 @@ clinical.info <- clinical.info[,clin.columns.interest]
 clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
 ```
 
-
-
 #Reading input tCycif data and cell.type data
+
 ```{r}
 #List all the tables with celltype labels
 big.data.set <- NULL
@@ -62,8 +61,8 @@ for (f in files){
 }
 ```
 
-
 #QC and filtering of the cell.type dataset
+
 ```{r}
 #Performing QC according to cell.types
 #Ignoring cell with low DAPI intensity and out of the core
@@ -116,6 +115,7 @@ scale.dataset <- function(dataset, channels, last.antibody.channel=11, norm.by=N
 
 #Running FloWSOM and 
 som.metaclustering.consensus <- function(dataset, kval=10, tempdir){
+dir.create(tempdir)
 out.som <- FlowSOM::ReadInput(dataset, transform = FALSE, scale = FALSE)
 out.som <- FlowSOM::BuildSOM(out.som, colsToUse = colnames(dataset), silent=T, xdim=90, ydim=90)
 out.som <- FlowSOM::BuildMST(out.som, silent=T)
@@ -128,13 +128,14 @@ return(metaclusters[out.som$map$mapping[,1]])
 }
 ```
 
+#Metaclustering of the cells
 
 ```{r}
 ###############Metaclustering of the cells###########
 
 #Channels used for the metaclustering
 interesting.channels.stromal <- c("pTBK1","Ki67","Vimentin", "pSTAT1", "MHCI",
-                      "ECadherin","aSMA","CD31","PDL1_488","Area","Eccentricity","Roundness")
+                      "ECadherin","aSMA","PDL1_488","Area","Eccentricity","Roundness")
 
 interesting.channels.cancer <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin","yH2AX",
                                  "pTBK1", "cPARP1", "CK7","PDL1_488","Area",
@@ -143,22 +144,20 @@ interesting.channels.cancer <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin"
 
 #Scaling datasets
 mat.stromal <- scale.dataset(dat.stromal, interesting.channels.stromal,
-                             last.antibody.channel = 9, norm.by = "cycif.slide")
+                             last.antibody.channel = 8, norm.by = "cycif.slide")
   
 mat.cancer <- scale.dataset(dat.cancer, interesting.channels.cancer,
                              last.antibody.channel = 10, norm.by = "cycif.slide")
 
 #Directories where to store the consensus clustering plots of the SOM nodes
-tmpdir.cancer <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_April2/SOM_consensusClusters_cancer/"
-tmpdir.stromal <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_April2/SOM_consensusClusters_stromal/"
+tmpdir.cancer <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November/SOM_consensusClusters_cancer/"
+tmpdir.stromal <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November/SOM_consensusClusters_stromal/"
 
 metalabels.cancer <- som.metaclustering.consensus(mat.cancer, kval = 5,
                                                   tmpdir.cancer)
 metalabels.stromal <- som.metaclustering.consensus(mat.stromal, kval = 5,
                                                    tmpdir.stromal)
 ```
-
-
 
 ```{r}
 #A big function to plot UMAPs, downscaling dataset
@@ -232,11 +231,10 @@ channel.UMAPs <- function(df, cell.labels, extralabels=NULL, rowselectionstatus=
 
 ```
 
-
-
 #Exploring metaclusters
+
 ```{r}
-outout.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_April/"
+outout.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November/"
 dir.create(outout.folder.name)
 
 #Scaling datasets
@@ -367,8 +365,6 @@ for (i in 2:length(umaps.cancer)){
 
 ```
 
-
-
 ```{r}
 #Counting the abundance of metaclusters per slide
 cluster.counts.strom  <- dat.stromal.clin2 %>% 
@@ -458,7 +454,6 @@ ggsave(p3.can, filename = paste0(outout.folder.name, "Metaclusters_Cancer_MolPro
        width = 24, height = 10, units = "cm")
 ```
 
-
 ```{r}
 #Merging meta.cluster IDs again to export to Napari format
 Metacluster.ID <- paste0("Cluster",metalabels.cancer)
@@ -468,12 +463,11 @@ Metacluster.ID <- paste0("Cluster",metalabels.stromal)
 mat.stromal2 <- cbind(dat.stromal, Metacluster.ID)
 ```
 
-
 ```{r}
 #Writing results in Napary format
 CoreSuffix <- "_Probabilities_cytomask2"
 project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
-outputfolder <- "Metaclusters_Napary2023_April"
+outputfolder <- "Metaclusters_Napary2023_November"
 
 for (i in unique(mat.stromal2$cycif.slide)){
   dir.create(paste0(project.folder, "/", i,"/", outputfolder))
@@ -494,7 +488,6 @@ for (i in unique(mat.stromal2$cycif.slide)){
   }
 }
 ```
-
 
 ```{r}
 #Merging results and writing them in tables
@@ -533,47 +526,51 @@ head(big.data.set.subtypes)
 
 ```{r}
 #Writing results
-write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info.csv", big.data.set.subtypes, sep=",",
+write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info_20231028.csv", big.data.set.subtypes, sep=",",
             row.names=FALSE)
 ```
+
 
 ```{r}
 #Writing results in scimap-format
 #Creating variable imageid
 big.data.set.subtypes$imageid <- paste(big.data.set.subtypes$cycif.slide, big.data.set.subtypes$cycif.core.id, sep="_")
 
+big.data.set.subtypes$GlobalCellType[grep("Others", big.data.set.subtypes$GlobalCellType)] <- "Other"
+
 #Writing as GlobalCelltype the cancer and stromal metaclusters ids, but merged CD4's and CD8's
 aux <- big.data.set.subtypes
 aux$CellId <- paste0(big.data.set.subtypes$imageid, "_c", big.data.set.subtypes$CellId)
 
-aux$GlobalCellType[grep("Stromal", aux$GlobalCellType)] <- aux$SubCelltype[grep("Stromal", aux$GlobalCellType)]
-aux$GlobalCellType[grep("Cancer", aux$GlobalCellType)] <- aux$SubCelltype[grep("Cancer", aux$GlobalCellType)]
-
 aux1 <- aux %>% select(imageid, CellId, DNA1, Area, Eccentricity, Perimeter, Roundness, X_position,
                       Y_position, GlobalCellType)
 
-write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format1.csv", aux1, sep=",",
+write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_scimap-format_columns-reduced_20231028.csv", aux1, sep=",",
             row.names=FALSE)
 
-#Writing as GlobalCelltype the cancer and stromal metaclusters ids, and subtypes of CD4's and CD8's
+aux1$GlobalCellType[grep("Stromal", aux$GlobalCellType)] <- aux$SubCelltype[grep("Stromal", aux$GlobalCellType)]
+aux1$GlobalCellType[grep("Cancer", aux$GlobalCellType)] <- aux$SubCelltype[grep("Cancer", aux$GlobalCellType)]
+write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format1_20231028.csv", aux1, sep=",",
+            row.names=FALSE)
 
+
+#Writing as GlobalCelltype the cancer and stromal metaclusters ids, and subtypes of CD4's and CD8's
 aux$GlobalCellType[grep("CD4.T.cells", aux$GlobalCellType)] <- aux$SubCelltype[grep("CD4.T.cells", aux$GlobalCellType)]
 aux$GlobalCellType[grep("CD8.T.cells", aux$GlobalCellType)] <- aux$SubCelltype[grep("CD8.T.cells", aux$GlobalCellType)]
 aux2 <- aux %>% select(imageid, CellId, DNA1, Area, Eccentricity, Perimeter, Roundness, X_position,
                       Y_position, GlobalCellType)
 
-write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format2.csv", aux2, sep=",",
+write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format2_20231028.csv", aux2, sep=",",
             row.names=FALSE)
 
 rm(aux1)
 rm(aux2)
 ```
 
-
 ```{r}
 #Counting how many subtype cells are per core and saving results in table
 big.data.set.subtypes.numbers  <- big.data.set.subtypes %>% group_by(imageid, SubCelltype) %>% summarise(N = n())
 
-write.table(file=paste0(outout.folder.name, "Metaclusters_abundance_per_core.csv"), big.data.set.subtypes.numbers,
+write.table(file=paste0(outout.folder.name, "Metaclusters_abundance_per_core_20231028.csv"), big.data.set.subtypes.numbers,
             sep=",", row.names=FALSE)
 ```

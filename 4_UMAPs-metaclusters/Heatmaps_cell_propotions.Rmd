@@ -29,8 +29,14 @@ out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/Heatmaps/"
 
 #Reading input dataset
 ```{r}
-cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All-cells_clusters.csv",
-                    header = TRUE, sep=",")
+#cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All-cells_clusters.csv",
+#                    header = TRUE, sep=",")
+```
+
+# Loading all cells
+```{r}
+big.cell.table <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info.csv", sep=",",
+                         header=TRUE)
 ```
 
 #Reading clinical info
