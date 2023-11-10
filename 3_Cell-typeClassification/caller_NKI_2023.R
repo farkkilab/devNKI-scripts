@@ -214,7 +214,7 @@ for (f in files){
         ####Cell-type calling for non-cancer cells ###########
         print("Running classifier, first gate")
         gating_results <- cellTypeCaller(data.filtered.non.cancer.sel, global.gates, "GlobalCellType", folder.name = outout.folder.name,
-                                         grid.size.xdim=20, hierarchical.trees = FALSE, scaling = TRUE)
+                                         grid.size.xdim=50, hierarchical.trees = FALSE, scaling = TRUE)
         
         #Merging results with signal data
         globalTypes <- gating_results[[1]] #Cell_types labels
