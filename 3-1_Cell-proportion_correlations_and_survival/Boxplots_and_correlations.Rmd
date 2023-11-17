@@ -4,7 +4,7 @@ output: html_notebook
 ---
 #Loading packages
 ```{r}
-install.packages("ggsignif") 
+#install.packages("ggsignif") 
 library(tidyverse)
 library(ggplot2)
 library(dplyr)
@@ -23,6 +23,7 @@ clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-Cy
 
 out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_Proportions_comparisons/"
 ```
+
 
 #Merging clinical info and data
 ```{r}
@@ -50,6 +51,7 @@ levels.molecular <- c("BRCAm.profile", "Non-BRCAmut.HRD", "Double.class", "CCNE1
 patient.cell.prop.clin$Molecular_profile <- factor(patient.cell.prop.clin$Molecular_profile,
                                                    levels = levels.molecular)
 ```
+
 
 #Boxplots for each celltype
 ```{r}

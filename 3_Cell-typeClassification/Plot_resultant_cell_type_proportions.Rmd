@@ -8,8 +8,6 @@ output: html_notebook
 library(tidyverse)
 library(ggplot2)
 library(dplyr)
-library(survival)
-library(survminer)
 library(gridExtra)
 library(RColorBrewer)
 ```
@@ -150,9 +148,9 @@ p <- ggplot(merged.types.patients, aes(x=Patient, y=Proportion, fill=Cell.type))
               legend.text = element_text(size=7), legend.key.size = unit(0.4, 'cm'),  legend.title = element_text(size=5))
 print(p)
 ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Proportions-barplot_Global.svg"),
-        width = 15, height = 9, units = "cm")
+        width = 15, height = 8.5, units = "cm")
 ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Proportions-barplot_Global.png"),
-        width = 15, height = 9, units = "cm")
+        width = 15, height = 8.5, units = "cm")
 
 ########################## ########################## ########################## 
 ########################## Now for Immune cells #################
@@ -245,57 +243,129 @@ ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Proportions-barpl
 
 rm(aux.dat)
 ```
-#Plot UMAPs
+#Function for plotting UMAPS
+```{r}
+#Function for scaling dataset by slide
+#It will also transfor data to log2 and will truncate the outliers above the 0.99 and below the 0.01 quantiles the corresponing quantiles
+scaling.sampling <- function(datain, channels, nsampling, slide.name="cycif.slide"){
+                  slide.name2 <- ensym(slide.name)
+                  dat.log2 <- datain[,c(channels,slide.name)]
+                  dat.log2[,channels] <- log2(dat.log2[,channels])
+                  #Scaling by slide
+                  scaled.data <- sapply(unique(dat.log2[,slide.name]), function(x){
+                    dat.slide <- dat.log2 %>% filter({{slide.name2}} == x) %>% select(-{{slide.name2}}) %>% as.matrix()
+                    quantiles <- apply(dat.slide, 2, function(x){quantile(x,c(0.01, 0.99))})
+                    for (x in colnames(dat.slide)){
+                      dat.slide[,x][which(dat.slide[,x] <= quantiles[1,x])] = quantiles[1,x]
+                      dat.slide[,x][which(dat.slide[,x] >= quantiles[2,x])] = quantiles[2,x]
+                    } 
+                    as.matrix(scale(dat.slide))
+                  })
+                  scaled.data2 <- NULL #Concatenating
+                  for (i in 1:length(scaled.data)){ scaled.data2 <- rbind(scaled.data2, scaled.data[[i]])}
+                  rm(scaled.data)
+                  #Sampling  
+                  rows.to.sample <- sample(1:nrow(scaled.data2), nsampling)
+                  dat.scaled.glob <- scaled.data2[rows.to.sample,]
+                  Global.types <- datain %>% slice(rows.to.sample) %>% pull(GlobalCellType)
+                  return(list(dat.scaled.glob,Global.types))
+              }
+```
+
+
+#Calculating UMAPs
 ```{r}
 set.seed(42) #For reproducibility 
 #Channels for global.cell types umaps
 global.channels.UMAPs <- c("CD3d","CD8a","CD4","FOXP3","CD68", "MHCII", "aSMA", "Vimentin",
                                 "CD163","CD207","CD11c", "CK7","ECadherin","PD1","CD45RO")
-immune.channels.UMAPs <- c("CD3d","CD8a","CD4","FOXP3","CD68", "MHCII", "CD163","CD207","CD11c", "PD1","CD45RO")
+immune.channels.UMAPs <- c("CD3d","CD8a","CD4","FOXP3","CD68", "MHCII", "CD15",
+                           "CD11b", "CD20", "CD163","CD207","CD11c", "PD1","CD45RO")
 N.sampling = 50000 #Number of cells to sample for UMAP
 
-dat.log2 <- merged.dat[,c(global.channels.UMAPs,"cycif.slide")]
-dat.log2[,global.channels.UMAPs] <- log2(dat.log2[,global.channels.UMAPs])
-to.remove <- sapply(global.channels.UMAPs, function(x){
-   quantiles <- quantile(dat.log2[,x], c(0.001,0.999))
-   which(dat.log2[,x] < quantiles[1]  | dat.log2[,x] > quantiles[2])
-})
-to.remove <- unique(unlist(to.remove))
-dat.log2 <- dat.log2[-c(to.remove),]
+global.colors <- c("#e600e6", "#FF7F00", "#2F82B9", "#e6c200", "grey") #Global.celltypes
+
+myloid.colors  <- c("#ade6e6", "#add8e6", "#0095b6", "#2F82B9", "#8DC594", "#62B74F")
+lymphocite.colors <- c("#e4717a", "#E94330", "#ff0000", "#ff6e4a", "#FF7F00", "#FDB661", "yellow")
+b.cells.color <-  "purple"
+other.color <- "grey"
+
+immune.colors <- c(myloid.colors, lymphocite.colors, b.cells.color, other.color)
+
+immune.levels <- c("CD11c.MY","CD15.MY","CD207.MY", "Other.MY", "CD163.MP", "CD68.MP",
+                    "CD4.T.cells", "CD4.CD45RO.T.cells", "CD4.PD1.T.cells", "CD8.CD45RO.T.cells",
+                    "CD8.effector.T.cells", "CD8.PD1.T.cells", "T.regs", "B.cells",
+                    "Other.immune")
+
+#Generating input data for global cell.types UMAPs
+sampled.global <- scaling.sampling(merged.dat, global.channels.UMAPs, N.sampling, slide.name="cycif.slide")
+dat.sampled.global <- sampled.global[[1]]
+types.sampled.global <- sampled.global[[2]]
+rm(sampled.global)
+types.sampled.global[types.sampled.global %in% Lymphoids] <- "Lymphoid"
+types.sampled.global[types.sampled.global %in% Myeloids] <- "Myeloid"
+types.sampled.global <- factor(types.sampled.global, levels=c("Cancer","Lymphoid","Myeloid","Stromal","Others"))
 
 
-dat.scaled.glob <- scale(dat.log2)
-rows.to.sample <- sample(1:nrow(dat.scaled.glob), N.sampling)
-dat.scaled.glob <- dat.scaled.glob[rows.to.sample,]
+#Generating input data immune cell.types UMAPs
+merged.dat.immune <- merged.dat[merged.dat$GlobalCellType %in% c(Lymphoids, Myeloids),]
+sampled.immune <- scaling.sampling(merged.dat.immune, immune.channels.UMAPs, N.sampling, slide.name="cycif.slide")
+dat.sampled.immune <- sampled.immune[[1]]
+types.sampled.immune <- sampled.immune[[2]]
+rm(sampled.immune)
+types.sampled.immune <- factor(types.sampled.immune, levels = immune.levels)
 
-Global.types <- merged.dat %>% slice(-to.remove) %>% slice(rows.to.sample) %>% pull(GlobalCellType)
-Global.types[Global.types %in% Lymphoids] <- "Lymphoid"
-Global.types[Global.types %in% Myeloids] <- "Myeloid"
-user.colors <- c("#e600e6", "#FF7F00", "#2F82B9", "#e6c200", "grey")
 
+#UMAP for global celltypes
+umap.global = uwot::umap(dat.sampled.global, n_neighbors = 50, scale=FALSE, spread=1.5, min_dist = 0.3, n_epochs = 60)
+global.uplot = data.frame(x = umap.global[,1], y= umap.global[,2])
+
+#UMAP for immmune cells
+umap.immune = uwot::umap(dat.sampled.immune, n_neighbors = 50, scale=FALSE, spread=1.5, min_dist = 0.3, n_epochs = 60)
+immune.uplot = data.frame(x = umap.immune[,1], y= umap.immune[,2])
 ```
 
 
+#Plotting UMAPs
 ```{r}
-umap_s = uwot::umap(dat.map, n_neighbors = 50, scale=FALSE, spread=1.5, min_dist = 0.3, n_epochs = 60)
-
-
-```
-
-
-```{r}
-uplot = data.frame(x = umap_s[,1], y= umap_s[,2])
-l = ggplot(uplot,aes(x,y, color=Global.types))+ geom_point(size=0.4, stroke=0, alpha=0.7)+ 
-    geom_density_2d(color="grey60", alpha=0.6) +
+#Plotting UMAP for immune cells
+l = ggplot(immune.uplot,aes(x,y, color=types.sampled.immune))+ geom_point(size=0.4, stroke=0, alpha=0.7)+ 
+    geom_density_2d(color="grey60", alpha=0.6, size = 0.25) +
     scale_fill_viridis(discrete = TRUE) + 
-    guides(color = guide_legend(override.aes = list(size=10))) + 
-    scale_color_manual(values=user.colors) + theme_bw() + coord_fixed(ratio=1)+
-    guides(colour = guide_legend(override.aes = list(size=10, shape=15, alpha=1), direction="horizontal", ncol=2, label.position="bottom", byrow=F)) + 
-    xlab("umap1") + ylab("umap2") + #ylim(-10, 10) + 
-    theme(legend.title = element_blank(), aspect.ratio=1.1)
+    guides(color = guide_legend(override.aes = list(size=5))) + 
+    scale_color_manual(values=immune.colors) + theme_bw() + coord_fixed(ratio=1) +
+    guides(colour = guide_legend(override.aes = list(size=4, shape=15, alpha=1), label.position="bottom",
+                                 direction="horizontal", ncol=2,  byrow=F)) + 
+    xlab("umap1") + ylab("umap2") + xlim(-9.25, 8) + ylim(-11.85,11.25) + 
+    theme(legend.position="right", legend.text = element_text(size=6), legend.spacing.x = unit(0.05, 'cm'),
+          legend.spacing.y = unit(0.06, 'cm'), legend.key.size = unit(0.4, 'cm'), legend.title = element_blank(),
+          aspect.ratio=1)
 print(l)
+ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Immunes.svg"),
+        width = 16, height = 8, units = "cm")
+ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Immunes.png"),
+        width = 16, height = 8, units = "cm")
 
+
+#Plotting UMAP for global cell types
+l = ggplot(global.uplot,aes(x,y, color=types.sampled.global))+ geom_point(size=0.4, stroke=0, alpha=0.7)+ 
+    geom_density_2d(color="grey60", alpha=0.6, size = 0.25) +
+    scale_fill_viridis(discrete = TRUE) + 
+    guides(color = guide_legend(override.aes = list(size=5))) + 
+    scale_color_manual(values=global.colors) + theme_bw() + coord_fixed(ratio=1) +
+    guides(colour = guide_legend(override.aes = list(size=4, shape=15, alpha=1), label.position="bottom",
+                                 direction="horizontal", ncol=1,  byrow=F)) + 
+    xlab("umap1") + ylab("umap2") + xlim(-11, 9) + ylim(-8,11.1) + 
+    theme(legend.position="right", legend.text = element_text(size=7), legend.spacing.x = unit(0.05, 'cm'),
+          legend.spacing.y = unit(0.06, 'cm'), legend.key.size = unit(0.5, 'cm'), legend.title = element_blank(),
+          aspect.ratio=1)
+print(l)
+ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Global-celltypes.svg"),
+         width = 16, height = 8, units = "cm")
+ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Global-celltypes.png"),
+         width = 16, height = 8, units = "cm")
 ```
+
 
 
 #Calculating proportion of cells by patient and plotting boxplots
@@ -450,160 +520,16 @@ rm(aux.dat)
 ```
 
 
-#Calculating cut-off points to definy high abundance of cells for survival analysis
+#Saving the proportion of cell by core
 ```{r}
+out.put.subfolder="01_Survival_Proportions_November_medians"
 core.percentages <- merged.dat %>% group_by(patient, cycif.core.id, GlobalCellType) %>%
                     summarise(n = n()) %>%
                     mutate(Proportion = n / sum(n))
 
-max.cell.percentages <- core.percentages  %>%
-                        group_by(patient, GlobalCellType) %>%
-                        summarise(Proportion=max(Proportion))
+tab <- as.data.frame(core.percentages)
+write.table(tab, file=paste0(output.folder, out.put.subfolder, "Proportions_by_core.csv"), sep=",", row.names = FALSE)
 
-cell.percentages2 <- as.data.frame(max.cell.percentages)
-cells_percentages.m <- cell.percentages2 %>% 
-                        pivot_wider(names_from = GlobalCellType, values_from = Proportion)
-
-cells_percentages.m <- as.data.frame(cells_percentages.m)
-row.names(cells_percentages.m) <- cells_percentages.m[,1]
-cells_percentages.m[is.na(cells_percentages.m)] <- 0
-
-cells_percentages.mc <- merge(cells_percentages.m, clinical.info, by.x="patient", by.y="TnumberAVL")
-
-cells_percentages.mc$timelastfu <- cells_percentages.mc$timelastfu/30.4
-cells_percentages.mc$daystoprogression <- cells_percentages.mc$daystoprogression/30.4 
-
-colnames(cells_percentages.mc)[2] <- "Bcells"
-vars.all = c("CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD8.effector.T.cells",
-             "Bcells","CD4.T.cells","CD4.PD1.T.cells","CD4.CD45RO.T.cells",
-             "CD11c.MY","CD15.MY","CD163.MP","CD207.MY","T.regs","Other.MY")
-
-cutpoints <- sapply(vars.all, function(x){
-              var = x
-              #cutval.var <- surv_cutpoint(cells_percentages.mc, time = "daystoprogression",
-              #                            event = "progression", variables=var)
-              #cutpoint <- cutval.var$cutpoint[1]
-              #names(cutpoint) <- NULL
-              sd.var <- sd(cells_percentages.mc[,var])
-              median.var <- median(cells_percentages.mc[,var])
-              cutpoint <- median.var #+ sd.var
-              #If the cut.point is equal to 0 then take the mean
-              if ((cutpoint) == 0){
-                print(var)
-                cutpoint <- mean(cells_percentages.mc[,var])
-              }
-              return(cutpoint)
-})
-```
-
-
-#Performing Kapplan-Meir plots for the abundance of each cell.type, according to therapy sequence
-```{r}
-output.folder = "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November/"
-dir.create(paste0(output.folder))
-
-suffix <- c("PDS","NACT")
-list.class <- list(c("Only debulking","Primairy debulking"),
-                   c("NACT","PDS followed by NACT", "NACT followed by re-debulking"))
-
-
-for (j in 1:length(suffix)){
-  data.in <- cells_percentages.mc[cells_percentages.mc$therapy_sequence %in% list.class[[j]],]
-  lastcol <- ncol(data.in)
-  colnames(data.in)[2] <- "Bcells"
-  
-  plots.OS <- lapply(vars.all, function(x){
-  vars = x
-  cut.off.value <- cutpoints[names(cutpoints) == vars]
-  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
-  data.in[,lastcol] <- cat.var
-  colnames(data.in)[lastcol] <- "aux"
-  fit <- survfit(Surv(timelastfu, finalstatus) ~ aux, data = data.in)
-  logrank = surv_pvalue(fit, data.in)
-  pval=logrank$pval.txt
-  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
-                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
-                  font.x = c(18, "plain"), font.y = c(18, "plain"),
-                  tables.y.text = FALSE,  break.time.by=20, xlim = c(0,80),
-                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
-                  palette = c("#ff5a36", "#4d4dff")) + 
-        guides(colour = guide_legend(nrow = 2))
-  p <- p + ylab("OS probability") + xlab("Time (months)")
-  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
-  p$plot <- p$plot + ggplot2::annotate("text", x = 65, y = 0.85, label =pval, size = 5)
-  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
-  plots <- list(plot=p$plot, table=p$table)
-  return(plots)
-  })
-  fig.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$plot})
-  tables.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$table})
-  
-  
-  plots.PFI <- lapply(vars.all, function(x){
-  vars = x
-  cut.off.value <- cutpoints[names(cutpoints) == vars]
-  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
-  data.in[,lastcol] <- cat.var
-  colnames(data.in)[lastcol] <- "aux"
-  fit <- survfit(Surv(daystoprogression, progression) ~ aux, data = data.in)
-  logrank = surv_pvalue(fit, data.in)
-  pval=logrank$pval.txt
-  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
-                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
-                  font.x = c(18, "plain"), font.y = c(18, "plain"),
-                  tables.y.text = FALSE,  break.time.by=20, xlim = c(0,80),
-                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
-                  palette = c("#ff5a36", "#4d4dff")) + 
-        guides(colour = guide_legend(nrow = 2))
-  p <- p + ylab("PFI probability") + xlab("Time (months)")
-  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
-  p$plot <- p$plot + ggplot2::annotate("text", x = 65, y = 0.85, label =pval, size = 5)
-  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
-  plots <- list(plot=p$plot, table=p$table)
-  return(plots)
-  })
-  fig.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$plot})
-  tables.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$table})
-  
-  ggsave(file=paste0(output.folder,suffix[j], "_OS.svg"), arrangeGrob(grobs = fig.OS, ncol = 2),
-         width = 23, height = 50, units = "cm")
-  
-  ggsave(file=paste0(output.folder,suffix[j], "_OS-table.svg"), arrangeGrob(grobs = tables.OS, ncol = 2),
-         width = 23, height = 22, units = "cm")
-  
-  ggsave(file=paste0(output.folder,suffix[j],"_PFI.svg"), arrangeGrob(grobs = fig.PFI, ncol = 2),
-         width = 23, height = 50, units = "cm")
-  
-  ggsave(file=paste0(output.folder,suffix[j],"_PFI-table.svg"), arrangeGrob(grobs = tables.PFI, ncol = 2),
-         width = 23, height = 22, units = "cm")
-}
-```
-
-#Performing forest plots
-```{r}
-lymphocites <- c("CD4.T.cells","CD4.CD45RO.T.cells","CD4.PD1.T.cells", "T.regs",
-                 "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells","Bcells")
-#lymphocites <- c("CD8.effector.T.cells")
-suffix <- c("PDS","NACT")
-list.class <- list(c("Only debulking","Primairy debulking"),
-                   c("NACT","PDS followed by NACT", "NACT followed by re-debulking"))
-
-for (j in 1:length(suffix)){
-  data.in <- cells_percentages.mc[cells_percentages.mc$therapy_sequence %in% list.class[[j]],]
-  df.celltype.abundance.strat <- sapply(lymphocites, function(x){
-    vars = x
-    cut.off.value <- cutpoints[names(cutpoints) == vars]
-    factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"), levels = c("low","high"))
-    })
-  df.celltype.abundance.strat <- as.data.frame(df.celltype.abundance.strat)
-  df.celltype.abundance.strat <- df.celltype.abundance.strat %>% mutate_each(funs(factor(., levels=c("low","high"))))
-  df.celltype.abundance.strat$timelastfu  <- data.in$timelastfu
-  df.celltype.abundance.strat$finalstatus  <- data.in$finalstatus
-  df.celltype.abundance.strat$Molecular_profile  <- data.in$Molecular_profile
-  cox.fit <- coxph( Surv(timelastfu, finalstatus) ~ ., data = df.celltype.abundance.strat)
-  p <- ggforest(cox.fit, main = paste0("Hazard ratio ", suffix[j]))
-  print(p)
-}
 ```
 
 
@@ -679,76 +605,5 @@ heatmap.plots(merged.dat, channels.for.Globalplots, suffix="Global-celltypes",
 
 heatmap.plots(merged.dat.immune, channels.for.Immuneplots, suffix="Immune-celltypes",
               Eccentricity.val=FALSE)
-
-```
-
-
-
-#Performing Kapplan-Meir plots for the abundance of each cell.type, for all data
-```{r}
-data.in <- cells_percentages.mc
-lastcol <- ncol(data.in)
-colnames(data.in)[2] <- "Bcells"
-
-plots.OS <- lapply(vars.all, function(x){
-  vars = x
-  cut.off.value <- cutpoints[names(cutpoints) == vars]
-  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
-  data.in[,lastcol] <- cat.var
-  colnames(data.in)[lastcol] <- "aux"
-  fit <- survfit(Surv(timelastfu, finalstatus) ~ aux, data = data.in)
-  logrank = surv_pvalue(fit, data.in)
-  pval=logrank$pval.txt
-  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
-                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
-                  font.x = c(18, "plain"), font.y = c(18, "plain"),
-                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
-                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
-                  palette = c("#34A0D3" ,"#FA5A41")) + 
-        guides(colour = guide_legend(nrow = 2))
-  p <- p + ylab("OS probability") + xlab("Time (days)")
-  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
-  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
-  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
-  plots <- list(plot=p$plot, table=p$table)
-  return(plots)
-})
-fig.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$plot})
-tables.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$table})
-
-
-plots.PFI <- lapply(vars.all, function(x){
-  vars = x
-  cut.off.value <- cutpoints[names(cutpoints) == vars]
-  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
-  data.in[,lastcol] <- cat.var
-  colnames(data.in)[lastcol] <- "aux"
-  fit <- survfit(Surv(daystoprogression, progression) ~ aux, data = data.in)
-  logrank = surv_pvalue(fit, data.in)
-  pval=logrank$pval.txt
-  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
-                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
-                  font.x = c(18, "plain"), font.y = c(18, "plain"),
-                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
-                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
-                  palette = c("#34A0D3" ,"#FA5A41")) + 
-        guides(colour = guide_legend(nrow = 2))
-  p <- p + ylab("PFI probability") + xlab("Time (days)")
-  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
-  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
-  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
-  plots <- list(plot=p$plot, table=p$table)
-  return(plots)
-})
-fig.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$plot})
-tables.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$table})
-
-ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions","ALL", ".png"), arrangeGrob(grobs = fig.OS, ncol = 2), width = 28, height = 40, units = "cm")
-
-ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions","ALL", "-table.png"), arrangeGrob(grobs = tables.OS, ncol = 2), width = 28, height = 40, units = "cm")
-
-ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions","ALL",".png"), arrangeGrob(grobs = fig.PFI, ncol = 2), width = 28, height = 40, units = "cm")
-
-ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions","ALL","-table.png"), arrangeGrob(grobs = tables.PFI, ncol = 2), width = 28, height = 40, units = "cm")
 
 ```

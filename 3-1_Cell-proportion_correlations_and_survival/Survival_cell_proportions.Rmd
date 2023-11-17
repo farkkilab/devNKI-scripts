@@ -4,38 +4,84 @@ output: html_notebook
 ---
 
 ```{r}
-library()
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(survival)
+library(survminer)
+library(gridExtra)
+library(grid)
+library(forestploter)
+```
 
+
+#Reading input
+```{r}
+#Reading input cell proportion table by patient
+#patient.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Cell-proportions_Heatmaps2/tCycif_cell-proportions-patients.csv", sep=",", header=TRUE)
+
+core.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/Proportions_by_core.csv", sep=",", header = TRUE)
+
+#Reading clinical info
+core.patient.slide <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt",
+                                 header = TRUE, sep="\t")
+
+
+#Reading clinical info
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.update.csv", sep=",", header = TRUE)
+
+Mol.profiles.patients <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_2023.csv",
+            sep=",", header=TRUE)
+
+out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
+
+dir.create(out.put.folder, showWarnings = FALSE)
+```
+
+
+#Calculating proportion by patient
+```{r}
+patient.cell.prop <- core.cell.prop %>% group_by(patient, GlobalCellType) %>% 
+                      summarise(Proportion = median(Proportion)) %>% as.data.frame() %>%
+                      pivot_wider(names_from = GlobalCellType, values_from = Proportion)
+patient.cell.prop[is.na(patient.cell.prop)] <- 0 
+patient.cell.prop
 ```
 
 
 
-#Calculating cut-off points to definy high abundance of cells for survival analysis
+#Merging clinical info and data
 ```{r}
-core.percentages <- merged.dat %>% group_by(patient, cycif.core.id, GlobalCellType) %>%
-                    summarise(n = n()) %>%
-                    mutate(Proportion = n / sum(n))
+interesting.clin.columns <- c("TnumberAVL", "centre","refage","incyear","timelastfu","daystoprogression",
+                              "finalstatus","progression")
 
-max.cell.percentages <- core.percentages  %>%
-                        group_by(patient, GlobalCellType) %>%
-                        summarise(Proportion=max(Proportion))
+clinical.info.sel <- clinical.info %>% select(interesting.clin.columns)
 
-cell.percentages2 <- as.data.frame(max.cell.percentages)
-cells_percentages.m <- cell.percentages2 %>% 
-                        pivot_wider(names_from = GlobalCellType, values_from = Proportion)
+patient.cell.prop.clin <- merge(patient.cell.prop, clinical.info.sel,
+                                by.x = "patient", by.y="TnumberAVL")
 
-cells_percentages.m <- as.data.frame(cells_percentages.m)
-row.names(cells_percentages.m) <- cells_percentages.m[,1]
-cells_percentages.m[is.na(cells_percentages.m)] <- 0
+patient.cell.prop.clin2 <- merge(patient.cell.prop.clin, Mol.profiles.patients, by="patient")
 
-cells_percentages.mc <- merge(cells_percentages.m, clinical.info, by.x="patient", by.y="TnumberAVL")
+patient.cell.prop.clin2$therapy_sequence <- ifelse(grepl("NACT", patient.cell.prop.clin2$therapy_sequence), "NACT","PDS")
+
+levels.molecular <- c("HRP", "BRCAmut/met", "HRD", "CCNE1amp", "Other")
+patient.cell.prop.clin2$Molecular.profile2 <- factor(patient.cell.prop.clin2$Molecular.profile2,
+                                                   levels = levels.molecular)
+
+patient.cell.prop.clin2$timelastfu <- patient.cell.prop.clin2$timelastfu/30.4
+patient.cell.prop.clin2$daystoprogression <- patient.cell.prop.clin2$daystoprogression/30.4
+
+patient.cell.prop.clin2
+```
 
 
-
-colnames(cells_percentages.mc)[2] <- "Bcells"
+#Calculating cut-off points (median values) per cell type to definy high abundance of cell.type for survival analysis
+```{r}
 vars.all = c("CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD8.effector.T.cells",
-             "Bcells","CD4.T.cells","CD4.T.cells","CD4.CD45RO.T.cells",
+             "B.cells","CD4.T.cells","CD4.PD1.T.cells","CD4.CD45RO.T.cells",
              "CD11c.MY","CD15.MY","CD163.MP","CD207.MY","T.regs","Other.MY")
+
 
 cutpoints <- sapply(vars.all, function(x){
               var = x
@@ -43,9 +89,13 @@ cutpoints <- sapply(vars.all, function(x){
               #                            event = "progression", variables=var)
               #cutpoint <- cutval.var$cutpoint[1]
               #names(cutpoint) <- NULL
-              sd.var <- sd(cells_percentages.mc[,var])
-              median.var <- median(cells_percentages.mc[,var])
-              cutpoint <- median.var #+ sd.var
+              median.var <- median(patient.cell.prop.clin2[,var])
+              cutpoint <- median.var
+              #If the cut.point is equal to 0 then take the mean
+              if ((cutpoint) == 0){
+                print(var)
+                cutpoint <- mean(patient.cell.prop.clin2[,var])
+              }
               return(cutpoint)
 })
 ```
@@ -53,19 +103,23 @@ cutpoints <- sapply(vars.all, function(x){
 
 #Performing Kapplan-Meir plots for the abundance of each cell.type, according to therapy sequence
 ```{r}
+output.folder = "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
+dir.create(paste0(output.folder))
+
 suffix <- c("PDS","NACT")
-list.class <- list(c("Only debulking","Primairy debulking"),
-                   c("NACT","PDS followed by NACT", "NACT followed by re-debulking"))
+list.class <- list(c("PDS"),
+                   c("NACT"))
+
 
 for (j in 1:length(suffix)){
-  data.in <- cells_percentages.mc[cells_percentages.mc$therapy_sequence %in% list.class[[j]],]
+  data.in <- patient.cell.prop.clin2[patient.cell.prop.clin2$therapy_sequence %in% list.class[[j]],]
   lastcol <- ncol(data.in)
-  colnames(data.in)[2] <- "Bcells"
+  colnames(data.in)[2] <- "B.cells"
   
   plots.OS <- lapply(vars.all, function(x){
   vars = x
   cut.off.value <- cutpoints[names(cutpoints) == vars]
-  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+  cat.var <- as.factor(ifelse(data.in[,vars] >  cut.off.value, "high","low"))
   data.in[,lastcol] <- cat.var
   colnames(data.in)[lastcol] <- "aux"
   fit <- survfit(Surv(timelastfu, finalstatus) ~ aux, data = data.in)
@@ -74,13 +128,13 @@ for (j in 1:length(suffix)){
   p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
                   font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
                   font.x = c(18, "plain"), font.y = c(18, "plain"),
-                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
+                  tables.y.text = FALSE,  break.time.by=20, xlim = c(0,80),
                   legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
-                  palette = c("#34A0D3" ,"#FA5A41")) + 
+                  palette = c("#ff5a36", "#4d4dff")) + 
         guides(colour = guide_legend(nrow = 2))
-  p <- p + ylab("OS probability") + xlab("Time (days)")
+  p <- p + ylab("OS probability") + xlab("Time (months)")
   p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
-  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
+  p$plot <- p$plot + ggplot2::annotate("text", x = 65, y = 0.85, label =pval, size = 5)
   p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
   plots <- list(plot=p$plot, table=p$table)
   return(plots)
@@ -92,7 +146,7 @@ for (j in 1:length(suffix)){
   plots.PFI <- lapply(vars.all, function(x){
   vars = x
   cut.off.value <- cutpoints[names(cutpoints) == vars]
-  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
+  cat.var <- as.factor(ifelse(data.in[,vars] >  cut.off.value, "high","low"))
   data.in[,lastcol] <- cat.var
   colnames(data.in)[lastcol] <- "aux"
   fit <- survfit(Surv(daystoprogression, progression) ~ aux, data = data.in)
@@ -101,13 +155,13 @@ for (j in 1:length(suffix)){
   p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
                   font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
                   font.x = c(18, "plain"), font.y = c(18, "plain"),
-                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
+                  tables.y.text = FALSE,  break.time.by=20, xlim = c(0,80),
                   legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
-                  palette = c("#34A0D3" ,"#FA5A41")) + 
+                  palette = c("#ff5a36", "#4d4dff")) + 
         guides(colour = guide_legend(nrow = 2))
-  p <- p + ylab("PFI probability") + xlab("Time (days)")
+  p <- p + ylab("PFI probability") + xlab("Time (months)")
   p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
-  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
+  p$plot <- p$plot + ggplot2::annotate("text", x = 65, y = 0.85, label =pval, size = 5)
   p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
   plots <- list(plot=p$plot, table=p$table)
   return(plots)
@@ -115,82 +169,227 @@ for (j in 1:length(suffix)){
   fig.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$plot})
   tables.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$table})
   
-  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions",suffix[j], ".png"), arrangeGrob(grobs = fig.OS, ncol = 2), width = 28, height = 40, units = "cm")
+  ggsave(file=paste0(output.folder,suffix[j], "_OS.svg"), arrangeGrob(grobs = fig.OS, ncol = 2),
+         width = 23, height = 50, units = "cm")
   
-  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions",suffix[j], "-table.png"), arrangeGrob(grobs = tables.OS, ncol = 2), width = 28, height = 40, units = "cm")
+  ggsave(file=paste0(output.folder,suffix[j], "_OS-table.svg"), arrangeGrob(grobs = tables.OS, ncol = 2),
+         width = 23, height = 22, units = "cm")
   
-  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions",suffix[j],".png"), arrangeGrob(grobs = fig.PFI, ncol = 2), width = 28, height = 40, units = "cm")
+  ggsave(file=paste0(output.folder,suffix[j],"_PFI.svg"), arrangeGrob(grobs = fig.PFI, ncol = 2),
+         width = 23, height = 50, units = "cm")
   
-  ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions",suffix[j],"-table.png"), arrangeGrob(grobs = tables.PFI, ncol = 2), width = 28, height = 40, units = "cm")
+  ggsave(file=paste0(output.folder,suffix[j],"_PFI-table.svg"), arrangeGrob(grobs = tables.PFI, ncol = 2),
+         width = 23, height = 22, units = "cm")
 }
 ```
 
 
-#Performing Kapplan-Meir plots for the abundance of each cell.type, for all data
+#Function to calculate cox hazzard ratios
 ```{r}
-data.in <- cells_percentages.mc
-lastcol <- ncol(data.in)
-colnames(data.in)[2] <- "Bcells"
+#Indicate the variables for which is going to be calculated the cox model
+Cox.regresion.variables2 <- function(data, variables, formula='Surv(timelastfu, finalstatus)~'){
 
-plots.OS <- lapply(vars.all, function(x){
-  vars = x
-  cut.off.value <- cutpoints[names(cutpoints) == vars]
-  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
-  data.in[,lastcol] <- cat.var
-  colnames(data.in)[lastcol] <- "aux"
-  fit <- survfit(Surv(timelastfu, finalstatus) ~ aux, data = data.in)
-  logrank = surv_pvalue(fit, data.in)
-  pval=logrank$pval.txt
-  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
-                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
-                  font.x = c(18, "plain"), font.y = c(18, "plain"),
-                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
-                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
-                  palette = c("#34A0D3" ,"#FA5A41")) + 
-        guides(colour = guide_legend(nrow = 2))
-  p <- p + ylab("OS probability") + xlab("Time (days)")
-  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
-  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
-  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
-  plots <- list(plot=p$plot, table=p$table)
-  return(plots)
-})
-fig.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$plot})
-tables.OS <- lapply(1:length(plots.OS) , function(x){plots.OS[[x]]$table})
+   N <- sapply(variables, function(x){length(which(data[,x] == 1))})
+   N <- as.data.frame(N)
+   Prop <- paste0(round((N[,1] * 100 /nrow(data)),0), "%")
 
+   univ_formulas <- sapply(variables,
+                           function(x) as.formula(paste(formula, x)))
 
-plots.PFI <- lapply(vars.all, function(x){
-  vars = x
-  cut.off.value <- cutpoints[names(cutpoints) == vars]
-  cat.var <- as.factor(ifelse(data.in[,vars] >=  cut.off.value, "high","low"))
-  data.in[,lastcol] <- cat.var
-  colnames(data.in)[lastcol] <- "aux"
-  fit <- survfit(Surv(daystoprogression, progression) ~ aux, data = data.in)
-  logrank = surv_pvalue(fit, data.in)
-  pval=logrank$pval.txt
-  p <- ggsurvplot(fit, data = data.in, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
-                  font.legend = c(18, "plain"), font.tickslab = c(16, "plain"),
-                  font.x = c(18, "plain"), font.y = c(18, "plain"),
-                  tables.y.text = FALSE,  break.time.by=500, xlim = c(0,2500),
-                  legend.labs=c(paste0(vars, "+"),paste0(vars, "-")),
-                  palette = c("#34A0D3" ,"#FA5A41")) + 
-        guides(colour = guide_legend(nrow = 2))
-  p <- p + ylab("PFI probability") + xlab("Time (days)")
-  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"), plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"), legend.key.height = unit(1.5, "line"))
-  p$plot <- p$plot + ggplot2::annotate("text", x = 2200, y = 0.85, label =pval, size = 5)
-  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"))
-  plots <- list(plot=p$plot, table=p$table)
-  return(plots)
-})
-fig.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$plot})
-tables.PFI <- lapply(1:length(plots.PFI) , function(x){plots.PFI[[x]]$table})
+   univ_models <- lapply( univ_formulas, function(x){coxph(x, data = data, method = "exact")})
 
-ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions","ALL", ".png"), arrangeGrob(grobs = fig.OS, ncol = 2), width = 28, height = 40, units = "cm")
+   univ_results <- lapply(univ_models,
+                          function(x){
+                             x <- summary(x)
+                             positive <- x$nevent
+                             prop.positive <- paste0(round((x$nevent) * 100 /x$n,0),"%")
+                             p.value <- signif(x$wald["pvalue"], digits=2)
+                             wald.test <- signif(x$wald["test"], digits=2)
+                             lastrow <- nrow(x$coef) #When using several covariables in the same regression, take the last one used
+                             beta <- signif(x$coef[lastrow, 1], digits=2);#coeficient beta
+                             HR <- signif(x$coef[lastrow, 2], digits=2);#exp(beta)
+                             HR.confint.lower <- signif(x$conf.int[lastrow,"lower .95"], 2)
+                             HR.confint.upper <- signif(x$conf.int[lastrow,"upper .95"],2)
+                             res <- c(HR, p.value, HR.confint.lower,HR.confint.upper)
+                             names(res)<-c("HR", "p.value", "HR.confint.lower", "HR.confint.upper")
+                             return(res)
+                          })
+   res <- t(as.data.frame(univ_results, check.names = FALSE))
+   result <- as.data.frame(res)
+   result2 <- cbind(N, Prop, result)
 
-ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_OS_tCycif_cellproportions","ALL", "-table.png"), arrangeGrob(grobs = tables.OS, ncol = 2), width = 28, height = 40, units = "cm")
-
-ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions","ALL",".png"), arrangeGrob(grobs = fig.PFI, ncol = 2), width = 28, height = 40, units = "cm")
-
-ggsave(file=paste0("D:/users/fperez/NKI_TMAs_AF/KM_PFI_tCycif_cellproportions","ALL","-table.png"), arrangeGrob(grobs = tables.PFI, ncol = 2), width = 28, height = 40, units = "cm")
-
+   return(result2)
+}
 ```
+
+
+#Calculating cox hazzard ratios un multi-variable model including the Molecular profile
+```{r}
+lymphocites <- c("CD4.T.cells","CD4.CD45RO.T.cells","CD4.PD1.T.cells", "T.regs",
+                 "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD15.MY")
+
+#Calculating cox hazzards in in two groups therapy sequence
+therapies <- c("NACT","PDS")
+cox.therpies <- lapply(therapies, function(x){
+        dat <- patient.cell.prop.clin2[(patient.cell.prop.clin2$therapy_sequence %in% x),]
+        
+        #If proportion of cell.type is equal or above the median in the sampled population, then is equal to 1
+        for (j in lymphocites){
+         cut.off.value <- cutpoints[names(cutpoints) == j]
+         dat[,j] <- ifelse(dat[,j] > cut.off.value,1,0)
+        }
+        #Calculating cox models
+        Cox.lymphocites <- Cox.regresion.variables2(dat, lymphocites,
+                                                        formula='Surv(timelastfu, finalstatus)~ Molecular.profile2 +')
+        Cox.lymphocites$Treatment <- x
+        Cox.lymphocites$Cell.type <- rownames(Cox.lymphocites)
+        return(Cox.lymphocites)
+})
+```
+
+
+
+```{r}
+#Reordering the cox results in an specific way neccesary for the package forestplot
+spacer <- paste(rep(" ", 20), collapse = " ") #For the forest plot table
+cox.groups <- rbind(cox.therpies[[2]], cox.therpies[[1]])
+df.forest <- NULL
+for (i in unique(cox.groups$Cell.type)){
+      row.class <- data.frame(Cell.type =i, N="", HR="", space=spacer, p.value=NA, HR.confint.lower=NA,
+                              HR.confint.upper=NA, HR2=NA)
+      set.df <- cox.groups[cox.groups$Cell.type %in% i,]
+      set.df$space <- spacer
+      set.df$HR2 <- set.df$HR
+      set.df.reordered <- set.df %>% select(Treatment, N, HR, space, p.value, HR.confint.lower, HR.confint.upper, HR2)
+      colnames(set.df.reordered) <- colnames(row.class)
+      row.celltype <- rbind(row.class, set.df.reordered)
+      df.forest <- rbind(df.forest, row.celltype)
+}
+colnames(df.forest)[4] <- ""
+colnames(df.forest)[3] <- "HR"
+#Renaming NACT as IDS
+df.forest$Cell.type[df.forest$Cell.type == "NACT"] <- "IDS"
+#Adding * to pvalues lower than 0.05
+low.pvals <- which(df.forest$p.value < 0.05)
+df.forest$p.value[low.pvals] <- paste0(df.forest$p.value[low.pvals],"*")
+df.forest$p.value[which(is.na(df.forest$p.value))] = ""
+colnames(df.forest)[5] <- "P.val"
+
+#indent the subgroup if there is a number in the HR2 column
+df.forest$Cell.type <- ifelse(is.na(df.forest$HR2), 
+                              df.forest$Cell.type,
+                              #unlist(sapply(df.forest$Cell.type, function(x){cat("\t",x)})))
+                              paste0("-", df.forest$Cell.type))
+
+
+p <- forest(df.forest[,c(1:5)],
+            est = df.forest$HR2,
+            lower = df.forest$HR.confint.lower, 
+            upper = df.forest$HR.confint.upper,
+            sizes = 0.5,
+            ci_column = 4,
+            ref_line = 1,
+            xlim = c(0, 1.5),
+            arrow_lab = c("Lower risk", "Higher risk"),
+            ticks_at = c(0.5, 1, 1.5))
+print(p)
+
+ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot.svg"), plot = p,
+                 width = 15, height = 18, units = "cm", device = svglite::svglite)
+```
+
+####Forest plots with individual cutoffs for PDS and NACT samples
+#Calculating cut-off points (median values) per cell type to definy high abundance of cell.type for survival analysis
+```{r}
+vars.all = c("CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD8.effector.T.cells",
+             "B.cells","CD4.T.cells","CD4.PD1.T.cells","CD4.CD45RO.T.cells",
+             "CD11c.MY","CD15.MY","CD163.MP","CD207.MY","T.regs","Other.MY")
+
+therapies <- c("NACT","PDS")
+cutpoints.therapy <-  lapply(therapies, function(j){
+    data.sel <- patient.cell.prop.clin2[patient.cell.prop.clin2$therapy_sequence == j,]
+    sapply(vars.all, function(x){
+                  var = x
+                  median.var <- median(data.sel[,var])
+                  cutpoint <- median.var
+                  #If the cut.point is equal to 0 then take the mean
+                  if ((cutpoint) == 0){
+                    print(var)
+                    cutpoint <- mean(patient.cell.prop.clin2[,var])
+                  }
+                  return(cutpoint)
+    })
+  })
+names(cutpoints.therapy) <- therapies
+cutpoints.therapy
+```
+
+
+###Cox models indivual cutoffs for NACT and PDS
+```{r}
+for (t in therapies){
+  #Calculating cox hazzards in in two groups therapy sequence
+  dat <- patient.cell.prop.clin2[(patient.cell.prop.clin2$therapy_sequence %in% t),]
+          
+  #If proportion of cell.type is equal or above the median in the sampled population, then is equal to 1
+  for (j in lymphocites){
+   cut.off.value <- cutpoints.therapy[[t]][names(cutpoints.therapy[[t]]) == j]
+   dat[,j] <- ifelse(dat[,j] > cut.off.value,1,0)
+  }
+  #Calculating cox models
+  Cox.lymphocites <- Cox.regresion.variables2(dat, lymphocites,
+                                                  formula='Surv(timelastfu, finalstatus)~ Molecular.profile2 +')
+  Cox.lymphocites$Treatment <- t
+  Cox.lymphocites$Cell.type <- rownames(Cox.lymphocites)
+
+  
+  #Reordering the cox results in an specific way neccesary for the package forestplot
+  spacer <- paste(rep(" ", 20), collapse = " ") #For the forest plot table
+  cox.groups <- Cox.lymphocites
+  df.forest <- NULL
+  for (i in unique(cox.groups$Cell.type)){
+        row.class <- data.frame(Cell.type =i, N="", HR="", space=spacer, p.value=NA, HR.confint.lower=NA,
+                                HR.confint.upper=NA, HR2=NA)
+        set.df <- cox.groups[cox.groups$Cell.type %in% i,]
+        set.df$space <- spacer
+        set.df$HR2 <- set.df$HR
+        set.df.reordered <- set.df %>% select(Treatment, N, HR, space, p.value, HR.confint.lower, HR.confint.upper, HR2)
+        colnames(set.df.reordered) <- colnames(row.class)
+        row.celltype <- rbind(row.class, set.df.reordered)
+        df.forest <- rbind(df.forest, row.celltype)
+  }
+  colnames(df.forest)[4] <- ""
+  colnames(df.forest)[3] <- "HR"
+  #Renaming NACT as IDS
+  df.forest$Cell.type[df.forest$Cell.type == "NACT"] <- "IDS"
+  #Adding * to pvalues lower than 0.05
+  low.pvals <- which(df.forest$p.value < 0.05)
+  df.forest$p.value[low.pvals] <- paste0(df.forest$p.value[low.pvals],"*")
+  df.forest$p.value[which(is.na(df.forest$p.value))] = ""
+  colnames(df.forest)[5] <- "P.val"
+  
+  #indent the subgroup if there is a number in the HR2 column
+  df.forest$Cell.type <- ifelse(is.na(df.forest$HR2), 
+                                df.forest$Cell.type,
+                                #unlist(sapply(df.forest$Cell.type, function(x){cat("\t",x)})))
+                                paste0("-", df.forest$Cell.type))
+  
+  
+  p <- forest(df.forest[,c(1:5)],
+              est = df.forest$HR2,
+              lower = df.forest$HR.confint.lower, 
+              upper = df.forest$HR.confint.upper,
+              sizes = 0.5,
+              ci_column = 4,
+              ref_line = 1,
+              xlim = c(0, 1.5),
+              arrow_lab = c("Lower risk", "Higher risk"),
+              ticks_at = c(0.5, 1, 1.5))
+  #print(p)
+  
+  ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_", t, ".svg"), plot = p,
+                   width = 15, height = 18, units = "cm")
+  dev.off()
+}
+```
+
