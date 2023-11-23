@@ -29,9 +29,9 @@ median.center <- function(x, na.rm = TRUE) {
 
 #This is for relative proportions
 p.vals.markers2 <- function(data, Profile.test="HRD", y.val=25, alt.hypothesis="greater"){
-       test.dat <- data$Rel.Prop[data$Molecular.profile2 == Profile.test]
+       test.dat <- data$Proportion[data$Molecular.profile2 == Profile.test]
        p.vals <- sapply(unique(data$Molecular.profile2), function(x){
-                mol.dat <- data$Rel.Prop[data$Molecular.profile2 == x]
+                mol.dat <- data$Proportion[data$Molecular.profile2 == x]
                 wtest <- wilcox.test(test.dat, mol.dat, alternative=alt.hypothesis)
                 wtest$p.value
        })
@@ -48,22 +48,25 @@ p.vals.markers2 <- function(data, Profile.test="HRD", y.val=25, alt.hypothesis="
 #Reading input
 ```{r}
 #Reading input cell proportion table by patient
-#patient.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Cell-proportions_Heatmaps2/tCycif_cell-proportions-patients.csv", sep=",", header=TRUE)
+#patient.cell.prop <- read.table(file="/home/fernpere/NKI/Analysis_results/01_Cell-proportions_Heatmaps2/tCycif_cell-proportions-patients.csv", sep=",", header=TRUE)
 
-core.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/Proportions_by_core.csv", sep=",", header = TRUE)
+core.cell.prop <- read.table(file="/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/Proportions_by_core.csv", sep=",", header = TRUE)
 
 #Reading clinical info
-core.patient.slide <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt",
+core.patient.slide <- read.table(file="/home/fernpere/NKI/Clinical_intersection/All-slides_cycif2samples.txt",
                                  header = TRUE, sep="\t")
 
 
 #Reading clinical info
-clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.update.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="/home/fernpere/NKI/Clinical_data/T-CycIF.update.csv", sep=",", header = TRUE)
 
-Mol.profiles.patients <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_2023.csv",
+#Mol.profiles.patients <- read.table(file="/home/fernpere/NKI/Tables/Molecular_profiles_patients_2023.csv",
+#            sep=",", header=TRUE)
+
+Mol.profiles.patients <- read.table(file="/home/fernpere/NKI/Tables/Molecular_profiles_patients_20231123.csv",
             sep=",", header=TRUE)
 
-out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
+out.put.folder <- "/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/"
 
 dir.create(out.put.folder, showWarnings = FALSE)
 ```
@@ -132,7 +135,7 @@ cutpoints <- sapply(vars.all, function(x){
 
 #Performing Kapplan-Meir plots for the abundance of each cell.type, according to therapy sequence
 ```{r}
-output.folder = "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
+output.folder = "/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/"
 dir.create(paste0(output.folder))
 
 suffix <- c("PDS","NACT")
@@ -438,20 +441,25 @@ melt.patient.cell.prop.clin$GlobalCelltype <- as.vector(melt.patient.cell.prop.c
 #melt.patient.cell.prop.clin$GlobalCelltype[grep("CD8", melt.patient.cell.prop.clin$GlobalCelltype)] <- "CD8.T.cells"
 #melt.patient.cell.prop.clin$GlobalCelltype[grep("CD4", melt.patient.cell.prop.clin$GlobalCelltype)] <- "CD4.T.cells"
 
+melt.patient.cell.prop.clin <- melt.patient.cell.prop.clin[melt.patient.cell.prop.clin$GlobalCelltype != "Other",]
+melt.patient.cell.prop.clin <- melt.patient.cell.prop.clin[melt.patient.cell.prop.clin$Molecular.profile2 != "Other",]
+
+
 med.prop.profile <- melt.patient.cell.prop.clin %>%  group_by(Molecular.profile2, therapy_sequence, GlobalCelltype) %>%
                     summarise(Prop=median(Proportion) * 100)
-
-med.prop.profile <- med.prop.profile %>% filter(Molecular.profile2 != "Other")
 
 mt.prop.profile <- med.prop.profile %>% pivot_wider(names_from = GlobalCelltype, values_from = Prop)
 mt.prop.profile <- as.data.frame(mt.prop.profile)
 mt.prop.profile[is.na(mt.prop.profile)] <- 0
 
 #Scaling by therapy sequence
-mt.prop.scaled <- mt.prop.profile %>% group_by(therapy_sequence) %>% 
-                  mutate(across(is.numeric, ~ as.numeric(scale(.)))) %>%
-                  as.data.frame()
+# mt.prop.scaled <- mt.prop.profile %>% group_by(therapy_sequence) %>% 
+#                   mutate(across(is.numeric, ~ as.numeric(scale(.)))) %>%
+#                   as.data.frame()
 
+mt.prop.scaled <- as.data.frame(scale(mt.prop.profile[,c(-1,-2)]))
+mt.prop.scaled$Molecular.profile2 <- mt.prop.profile$Molecular.profile2
+mt.prop.scaled$therapy_sequence <- mt.prop.profile$therapy_sequence
 
 #Preparing data for creating complex heatmap
 M.profile.order <- mt.prop.scaled$Molecular.profile2 
@@ -460,7 +468,7 @@ mt.prop.scaled <- mt.prop.scaled %>% #select(CD4.T.cells, CD8.T.cells, T.regs, B
                                     #        CD163.MP, CD68.MP, Other.MY) %>%
                                   select(CD4.T.cells, CD4.CD45RO.T.cells, CD4.PD1.T.cells, CD8.effector.T.cells,
                                          CD8.CD45RO.T.cells, CD8.PD1.T.cells, T.regs, B.cells,
-                                         CD11c.MY, CD163.MP, CD68.MP, Other.MY)    %>%
+                                         CD11c.MY, CD163.MP, CD68.MP, Other.MY, Stromal, Cancer)    %>%
                   as.matrix()
 
 
@@ -472,7 +480,7 @@ ha = rowAnnotation(Therapy=therapy.order, M.profile=M.profile.order, col=colours
 
 hmap <- Heatmap(mt.prop.scaled, right_annotation = ha, cluster_columns = FALSE, cluster_rows = FALSE,
         name="Median proportion \n (Z-score)")
-svg(paste0(output.folder, "Heatmap_Mprofile_Immune_prop.svg"), width=8, height=5)
+svg(paste0(output.folder, "Heatmap_Mprofile_ImmuneStromalCancer_prop.svg"), width=8, height=5)
 draw(hmap)
 dev.off()
 ```
@@ -482,19 +490,19 @@ dev.off()
 patient.cell.prop.clin2$therapy_sequence[patient.cell.prop.clin2$therapy_sequence == "NACT" ] <- "IDS"
 
 patient.cell.prop.clin2$Molecular.profile2 = as.vector(patient.cell.prop.clin2$Molecular.profile2)
-cell.types.interest  <- list(c("CD163.MP","CD68.MP"))
+cell.types.interest  <- list(c("CD4.T.cells","CD4.CD45RO.T.cells","CD4.PD1.T.cells", 
+                 "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells","B.cells"))
 
 columns.extra <- c("patient","Molecular.profile2","therapy_sequence")
-
-
 
 col <- rowSums(patient.cell.prop.clin2[cell.types.interest[[1]]])
 dat <- patient.cell.prop.clin2[,c(columns.extra)]
 dat$Proportion <- col
 
-p.vals.dataframe <- p.vals.markers2(dat, Profile.test="CCNE1amp", y.val=0.35, yvar="Proportion")
+p.vals.markers2(subset(dat, therapy_sequence=="PDS"), Profile.test="BRCAmut/met", y.val = 0.35)
 
 p <- ggplot(dat, aes(x=Molecular.profile2,y=Proportion)) +  facet_wrap("therapy_sequence") + 
+     # ylim(0,0.13) +
       geom_point(aes(col=Molecular.profile2), position= position_jitter(width= .3, height = 0), size= 1.5, alpha = 0.5) +
       geom_violin(fill=NA) + geom_boxplot(fill=NA, width=0.2, outlier.shape = NA) +
       theme(strip.placement = "outside",strip.background = element_blank(),
