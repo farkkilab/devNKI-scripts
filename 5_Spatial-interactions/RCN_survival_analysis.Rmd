@@ -57,22 +57,11 @@ BRCAnessNeg <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "No BRCAnes
 
 
 clindata.shrd$Molecular.profile2 <- rep("Other",  nrow(clindata.shrd))
-
-clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "HRD"
 clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "HRP"
-# clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "BRCAness+sHRD-"
-# clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "BRCAness-sHRD+"
-
-clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "Other"
-clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "Other"
-
-
-
 clindata.shrd[which(clindata.shrd$patient %in% CCNE1amp), "Molecular.profile2"] <- "CCNE1amp"
-clindata.shrd[which(clindata.shrd$patient %in% BRCAsamples), "Molecular.profile2"] <- "BRCAmut/met"
-
+clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "HRD"
 clindata.shrd[which(clindata.shrd$QC_BRCA_CCNE == 1), "Molecular.profile2"] <- "Other"
-
+clindata.shrd[which(clindata.shrd$patient %in% BRCAsamples), "Molecular.profile2"] <- "BRCAmut/met"
 
 clindata.shrd$imageid <- paste0(clindata.shrd$cycif.slide, "_", clindata.shrd$cycif.core.id)
 
@@ -82,7 +71,7 @@ clindata.shrd.patient <- unique(clindata.shrd[,colmns.interest])
 
 Molecular.profiles.new <- clindata.shrd.patient %>% select(patient, Molecular.profile2, therapy_sequence)
 write.table(Molecular.profiles.new,
-            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_2023.csv",
+            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231123.csv",
             sep=",", row.names=FALSE)
 ```
 
