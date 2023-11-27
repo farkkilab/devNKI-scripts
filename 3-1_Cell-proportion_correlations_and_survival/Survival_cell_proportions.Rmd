@@ -48,25 +48,22 @@ p.vals.markers2 <- function(data, Profile.test="HRD", y.val=25, alt.hypothesis="
 #Reading input
 ```{r}
 #Reading input cell proportion table by patient
-#patient.cell.prop <- read.table(file="/home/fernpere/NKI/Analysis_results/01_Cell-proportions_Heatmaps2/tCycif_cell-proportions-patients.csv", sep=",", header=TRUE)
+#patient.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Cell-proportions_Heatmaps2/tCycif_cell-proportions-patients.csv", sep=",", header=TRUE)
 
-core.cell.prop <- read.table(file="/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/Proportions_by_core.csv", sep=",", header = TRUE)
+core.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/Proportions_by_core.csv", sep=",", header = TRUE)
 
 #Reading clinical info
-core.patient.slide <- read.table(file="/home/fernpere/NKI/Clinical_intersection/All-slides_cycif2samples.txt",
+core.patient.slide <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt",
                                  header = TRUE, sep="\t")
 
 
 #Reading clinical info
-clinical.info <- read.table(file="/home/fernpere/NKI/Clinical_data/T-CycIF.update.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.update.csv", sep=",", header = TRUE)
 
-#Mol.profiles.patients <- read.table(file="/home/fernpere/NKI/Tables/Molecular_profiles_patients_2023.csv",
-#            sep=",", header=TRUE)
-
-Mol.profiles.patients <- read.table(file="/home/fernpere/NKI/Tables/Molecular_profiles_patients_20231123.csv",
+Mol.profiles.patients <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231123.csv",
             sep=",", header=TRUE)
 
-out.put.folder <- "/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/"
+out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
 
 dir.create(out.put.folder, showWarnings = FALSE)
 ```
@@ -135,7 +132,7 @@ cutpoints <- sapply(vars.all, function(x){
 
 #Performing Kapplan-Meir plots for the abundance of each cell.type, according to therapy sequence
 ```{r}
-output.folder = "/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/"
+output.folder = "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
 dir.create(paste0(output.folder))
 
 suffix <- c("PDS","NACT")
@@ -490,8 +487,7 @@ dev.off()
 patient.cell.prop.clin2$therapy_sequence[patient.cell.prop.clin2$therapy_sequence == "NACT" ] <- "IDS"
 
 patient.cell.prop.clin2$Molecular.profile2 = as.vector(patient.cell.prop.clin2$Molecular.profile2)
-cell.types.interest  <- list(c("CD4.T.cells","CD4.CD45RO.T.cells","CD4.PD1.T.cells", 
-                 "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells","B.cells"))
+cell.types.interest  <- list(c("CD163.MP"))
 
 columns.extra <- c("patient","Molecular.profile2","therapy_sequence")
 
@@ -499,7 +495,7 @@ col <- rowSums(patient.cell.prop.clin2[cell.types.interest[[1]]])
 dat <- patient.cell.prop.clin2[,c(columns.extra)]
 dat$Proportion <- col
 
-p.vals.markers2(subset(dat, therapy_sequence=="PDS"), Profile.test="BRCAmut/met", y.val = 0.35)
+p.vals.markers2(subset(dat, therapy_sequence=="PDS"), Profile.test="CCNE1amp", y.val = 0.35)
 
 p <- ggplot(dat, aes(x=Molecular.profile2,y=Proportion)) +  facet_wrap("therapy_sequence") + 
      # ylim(0,0.13) +
