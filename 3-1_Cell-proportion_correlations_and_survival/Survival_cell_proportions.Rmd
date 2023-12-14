@@ -56,20 +56,30 @@ core.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/
 core.patient.slide <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt",
                                  header = TRUE, sep="\t")
 
-
 #Reading clinical info
 clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.update.csv", sep=",", header = TRUE)
 
-Mol.profiles.patients <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231123.csv",
+Mol.profiles.patients <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
             sep=",", header=TRUE)
 
-out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
+#out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_min3cores/"
+out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians//"
 
 dir.create(out.put.folder, showWarnings = FALSE)
 ```
 
+#Selecting only patients with at leats 3 cores
+```{r}
+#Patients selected
+# sel.patients <- core.cell.prop %>% group_by(patient) %>%
+#                   summarise(n.cores=length(unique(cycif.core.id))) %>%
+#                   filter (n.cores >=3 ) %>% pull(patient)
+# 
+# core.cell.prop <- core.cell.prop[core.cell.prop$patient %in% sel.patients,]
+```
 
-#Calculating proportion by patient
+
+#Calculating cell proportions by patient
 ```{r}
 patient.cell.prop <- core.cell.prop %>% group_by(patient, GlobalCellType) %>% 
                       summarise(Proportion = median(Proportion)) %>% as.data.frame() %>%
@@ -82,26 +92,44 @@ patient.cell.prop
 
 #Merging clinical info and data
 ```{r}
+#Selecting relevant columns from the clinical info
 interesting.clin.columns <- c("TnumberAVL", "centre","refage","incyear","timelastfu","daystoprogression",
-                              "finalstatus","progression")
+                              "finalstatus","progression","figo_stage")
 
 clinical.info.sel <- clinical.info %>% select(interesting.clin.columns)
 
+#Merging the cell proportions and selected clinical info
 patient.cell.prop.clin <- merge(patient.cell.prop, clinical.info.sel,
                                 by.x = "patient", by.y="TnumberAVL")
 
+#Merging with molecular profile
 patient.cell.prop.clin2 <- merge(patient.cell.prop.clin, Mol.profiles.patients, by="patient")
 
-patient.cell.prop.clin2$therapy_sequence <- ifelse(grepl("NACT", patient.cell.prop.clin2$therapy_sequence), "NACT","PDS")
+#Re-naming therapy sequence as IDS and PDS
+patient.cell.prop.clin2$therapy_sequence <- ifelse(grepl("NACT", patient.cell.prop.clin2$therapy_sequence), "IDS","PDS")
 
+#Factor with levels are for the survival analysis. HRP is used as reference in cox models
 levels.molecular <- c("HRP", "BRCAmut/met", "HRD", "CCNE1amp", "Other")
 patient.cell.prop.clin2$Molecular.profile2 <- factor(patient.cell.prop.clin2$Molecular.profile2,
                                                    levels = levels.molecular)
 
+#Converting survival info from days to months
 patient.cell.prop.clin2$timelastfu <- patient.cell.prop.clin2$timelastfu/30.4
 patient.cell.prop.clin2$daystoprogression <- patient.cell.prop.clin2$daystoprogression/30.4
 
-patient.cell.prop.clin2
+#Structuring data
+patient.cell.prop.clin2$figo_stage2 <- NA
+patient.cell.prop.clin2$figo_stage2[patient.cell.prop.clin2$figo_stage == "FIGO II"] <- 2
+patient.cell.prop.clin2$figo_stage2[patient.cell.prop.clin2$figo_stage == "FIGO III"] <- 3
+patient.cell.prop.clin2$figo_stage2[patient.cell.prop.clin2$figo_stage == "FIGO IV"] <- 4
+
+#Structuring data
+patient.cell.prop.clin2$refage2 <- NA
+patient.cell.prop.clin2$refage2[patient.cell.prop.clin2$refage < 50] <- 0
+patient.cell.prop.clin2$refage2[patient.cell.prop.clin2$refage >= 50 & patient.cell.prop.clin2$refage < 60] <- 1
+patient.cell.prop.clin2$refage2[patient.cell.prop.clin2$refage >= 60 & patient.cell.prop.clin2$refage < 70] <- 2
+patient.cell.prop.clin2$refage2[patient.cell.prop.clin2$refage >= 70 & patient.cell.prop.clin2$refage < 80] <- 3
+patient.cell.prop.clin2$refage2[patient.cell.prop.clin2$refage >= 80] <- 4
 ```
 
 
@@ -109,7 +137,7 @@ patient.cell.prop.clin2
 ```{r}
 vars.all = c("CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD8.effector.T.cells",
              "B.cells","CD4.T.cells","CD4.PD1.T.cells","CD4.CD45RO.T.cells",
-             "CD11c.MY","CD15.MY","CD163.MP","CD207.MY","T.regs","Other.MY")
+             "CD68.MP", "CD11c.MY","CD15.MY","CD163.MP","CD207.MY","T.regs","Other.MY")
 
 
 cutpoints <- sapply(vars.all, function(x){
@@ -133,11 +161,12 @@ cutpoints <- sapply(vars.all, function(x){
 #Performing Kapplan-Meir plots for the abundance of each cell.type, according to therapy sequence
 ```{r}
 output.folder = "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
+#output.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_min3cores/"
 dir.create(paste0(output.folder))
 
-suffix <- c("PDS","NACT")
+suffix <- c("PDS","IDS")
 list.class <- list(c("PDS"),
-                   c("NACT"))
+                   c("IDS"))
 
 
 for (j in 1:length(suffix)){
@@ -232,9 +261,10 @@ Cox.regresion.variables2 <- function(data, variables, formula='Surv(timelastfu, 
                              x <- summary(x)
                              positive <- x$nevent
                              prop.positive <- paste0(round((x$nevent) * 100 /x$n,0),"%")
-                             p.value <- signif(x$wald["pvalue"], digits=2)
+                             #p.value <- signif(x$wald["pvalue"], digits=2) #p.value for the model
                              wald.test <- signif(x$wald["test"], digits=2)
                              lastrow <- nrow(x$coef) #When using several covariables in the same regression, take the last one used
+                             p.value <- signif(x$coef[lastrow, "Pr(>|z|)"], digits=2) #p.value for last covariable
                              beta <- signif(x$coef[lastrow, 1], digits=2);#coeficient beta
                              HR <- signif(x$coef[lastrow, 2], digits=2);#exp(beta)
                              HR.confint.lower <- signif(x$conf.int[lastrow,"lower .95"], 2)
@@ -252,129 +282,42 @@ Cox.regresion.variables2 <- function(data, variables, formula='Surv(timelastfu, 
 ```
 
 
-#Calculating cox hazzard ratios un multi-variable model including the Molecular profile
+#Calculating individual cox hazzard ratios per cell.type and including the Molecular profile in each
 ```{r}
-lymphocites <- c("CD4.T.cells","CD4.CD45RO.T.cells","CD4.PD1.T.cells", "T.regs",
-                 "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD15.MY")
-
-#Calculating cox hazzards in in two groups therapy sequence
-therapies <- c("NACT","PDS")
-cox.therpies <- lapply(therapies, function(x){
-        dat <- patient.cell.prop.clin2[(patient.cell.prop.clin2$therapy_sequence %in% x),]
-        
-        #If proportion of cell.type is equal or above the median in the sampled population, then is equal to 1
-        for (j in lymphocites){
-         cut.off.value <- cutpoints[names(cutpoints) == j]
-         dat[,j] <- ifelse(dat[,j] > cut.off.value,1,0)
-        }
-        #Calculating cox models
-        Cox.lymphocites <- Cox.regresion.variables2(dat, lymphocites,
-                                                        formula='Surv(timelastfu, finalstatus)~ Molecular.profile2 +')
-        Cox.lymphocites$Treatment <- x
-        Cox.lymphocites$Cell.type <- rownames(Cox.lymphocites)
-        return(Cox.lymphocites)
-})
-```
+tm <- forest_theme(core=list(bg_params=list(fill = c("grey95", "#eaf8f5", "white"))))
 
 
+formulas <- c('Surv(timelastfu, finalstatus)~ Molecular.profile2 + refage2  + figo_stage2 +',
+              'Surv(daystoprogression, progression)~ Molecular.profile2 + refage2  + figo_stage2 +')
 
-```{r}
-#Reordering the cox results in an specific way neccesary for the package forestplot
-spacer <- paste(rep(" ", 20), collapse = " ") #For the forest plot table
-cox.groups <- rbind(cox.therpies[[2]], cox.therpies[[1]])
-df.forest <- NULL
-for (i in unique(cox.groups$Cell.type)){
-      row.class <- data.frame(Cell.type =i, N="", HR="", space=spacer, p.value=NA, HR.confint.lower=NA,
-                              HR.confint.upper=NA, HR2=NA)
-      set.df <- cox.groups[cox.groups$Cell.type %in% i,]
-      set.df$space <- spacer
-      set.df$HR2 <- set.df$HR
-      set.df.reordered <- set.df %>% select(Treatment, N, HR, space, p.value, HR.confint.lower, HR.confint.upper, HR2)
-      colnames(set.df.reordered) <- colnames(row.class)
-      row.celltype <- rbind(row.class, set.df.reordered)
-      df.forest <- rbind(df.forest, row.celltype)
-}
-colnames(df.forest)[4] <- ""
-colnames(df.forest)[3] <- "HR"
-#Renaming NACT as IDS
-df.forest$Cell.type[df.forest$Cell.type == "NACT"] <- "IDS"
-#Adding * to pvalues lower than 0.05
-low.pvals <- which(df.forest$p.value < 0.05)
-df.forest$p.value[low.pvals] <- paste0(df.forest$p.value[low.pvals],"*")
-df.forest$p.value[which(is.na(df.forest$p.value))] = ""
-colnames(df.forest)[5] <- "P.val"
+formula.suffix <- c('OS_mprofile_age_figo', 'PFS_mprofile_age_figo')
 
-#indent the subgroup if there is a number in the HR2 column
-df.forest$Cell.type <- ifelse(is.na(df.forest$HR2), 
-                              df.forest$Cell.type,
-                              #unlist(sapply(df.forest$Cell.type, function(x){cat("\t",x)})))
-                              paste0("-", df.forest$Cell.type))
+lymphocites <- c("CD4.T.cells","CD4.CD45RO.T.cells", "CD4.PD1.T.cells", "T.regs",
+                 "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells", "B.cells", "CD15.MY",
+                 "CD11c.MY", "Other.MY")
 
-
-p <- forest(df.forest[,c(1:5)],
-            est = df.forest$HR2,
-            lower = df.forest$HR.confint.lower, 
-            upper = df.forest$HR.confint.upper,
-            sizes = 0.5,
-            ci_column = 4,
-            ref_line = 1,
-            xlim = c(0, 1.5),
-            arrow_lab = c("Lower risk", "Higher risk"),
-            ticks_at = c(0.5, 1, 1.5))
-print(p)
-
-ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot.svg"), plot = p,
-                 width = 15, height = 18, units = "cm", device = svglite::svglite)
-```
-
-####Forest plots with individual cutoffs for PDS and NACT samples
-#Calculating cut-off points (median values) per cell type to definy high abundance of cell.type for survival analysis
-```{r}
-vars.all = c("CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD8.effector.T.cells",
-             "B.cells","CD4.T.cells","CD4.PD1.T.cells","CD4.CD45RO.T.cells",
-             "CD11c.MY","CD15.MY","CD163.MP","CD207.MY","T.regs","Other.MY")
-
-therapies <- c("NACT","PDS")
-cutpoints.therapy <-  lapply(therapies, function(j){
-    data.sel <- patient.cell.prop.clin2[patient.cell.prop.clin2$therapy_sequence == j,]
-    sapply(vars.all, function(x){
-                  var = x
-                  median.var <- median(data.sel[,var])
-                  cutpoint <- median.var
-                  #If the cut.point is equal to 0 then take the mean
-                  if ((cutpoint) == 0){
-                    print(var)
-                    cutpoint <- mean(patient.cell.prop.clin2[,var])
-                  }
-                  return(cutpoint)
-    })
-  })
-names(cutpoints.therapy) <- therapies
-cutpoints.therapy
-```
-
-
-###Cox models indivual cutoffs for NACT and PDS
-```{r}
-for (t in therapies){
-  #Calculating cox hazzards in in two groups therapy sequence
-  dat <- patient.cell.prop.clin2[(patient.cell.prop.clin2$therapy_sequence %in% t),]
+for (index in 1:length(formulas)){
+  #Calculating cox hazards in in two groups therapy sequence
+  therapies <- c("IDS","PDS")
+  cox.therpies <- lapply(therapies, function(x){
+          dat <- patient.cell.prop.clin2[(patient.cell.prop.clin2$therapy_sequence %in% x),]
           
-  #If proportion of cell.type is equal or above the median in the sampled population, then is equal to 1
-  for (j in lymphocites){
-   cut.off.value <- cutpoints.therapy[[t]][names(cutpoints.therapy[[t]]) == j]
-   dat[,j] <- ifelse(dat[,j] > cut.off.value,1,0)
-  }
-  #Calculating cox models
-  Cox.lymphocites <- Cox.regresion.variables2(dat, lymphocites,
-                                                  formula='Surv(timelastfu, finalstatus)~ Molecular.profile2 +')
-  Cox.lymphocites$Treatment <- t
-  Cox.lymphocites$Cell.type <- rownames(Cox.lymphocites)
-
+          #If proportion of cell.type is equal or above the median in the sampled population, then is equal to 1
+          for (j in lymphocites){
+           cut.off.value <- cutpoints[names(cutpoints) == j]
+           dat[,j] <- ifelse(dat[,j] > cut.off.value,1,0)
+          }
+          #Calculating cox models
+          Cox.lymphocites <- Cox.regresion.variables2(dat, lymphocites, formula=formulas[index])
+          Cox.lymphocites$Treatment <- x
+          Cox.lymphocites$Cell.type <- rownames(Cox.lymphocites)
+          return(Cox.lymphocites)
+  })
   
-  #Reordering the cox results in an specific way neccesary for the package forestplot
+  
+  #Reordering the cox results in an specific way necessary for the package forestplot
   spacer <- paste(rep(" ", 20), collapse = " ") #For the forest plot table
-  cox.groups <- Cox.lymphocites
+  cox.groups <- rbind(cox.therpies[[2]], cox.therpies[[1]])
   df.forest <- NULL
   for (i in unique(cox.groups$Cell.type)){
         row.class <- data.frame(Cell.type =i, N="", HR="", space=spacer, p.value=NA, HR.confint.lower=NA,
@@ -389,8 +332,7 @@ for (t in therapies){
   }
   colnames(df.forest)[4] <- ""
   colnames(df.forest)[3] <- "HR"
-  #Renaming NACT as IDS
-  df.forest$Cell.type[df.forest$Cell.type == "NACT"] <- "IDS"
+  
   #Adding * to pvalues lower than 0.05
   low.pvals <- which(df.forest$p.value < 0.05)
   df.forest$p.value[low.pvals] <- paste0(df.forest$p.value[low.pvals],"*")
@@ -413,17 +355,229 @@ for (t in therapies){
               ref_line = 1,
               xlim = c(0, 1.5),
               arrow_lab = c("Lower risk", "Higher risk"),
-              ticks_at = c(0.5, 1, 1.5))
-  #print(p)
+              ticks_at = c(0.5, 1, 1.5),
+              theme = tm)
+  print(p)
   
-  ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_", t, ".svg"), plot = p,
-                   width = 15, height = 18, units = "cm")
-  dev.off()
+  ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_", formula.suffix[index], ".svg"), plot = p,
+                   width = 15, height = 26, units = "cm", device = svglite::svglite)
+  
+  ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_", formula.suffix[index], ".png"), plot = p,
+                   width = 15, height = 26, units = "cm")
 }
 ```
 
+####Forest plots with individual cutoffs for PDS and IDS samples
+#Calculating cut-off points (median values) per cell type to definy high abundance of cell.type for survival analysis
+```{r}
+vars.all = c("CD8.CD45RO.T.cells","CD8.PD1.T.cells","CD8.effector.T.cells",
+             "B.cells","CD4.T.cells","CD4.PD1.T.cells","CD4.CD45RO.T.cells",
+             "CD11c.MY","CD15.MY","CD163.MP","CD207.MY","T.regs","Other.MY")
+
+therapies <- c("IDS","PDS")
+cutpoints.therapy <-  lapply(therapies, function(j){
+    data.sel <- patient.cell.prop.clin2[patient.cell.prop.clin2$therapy_sequence == j,]
+    sapply(vars.all, function(x){
+                  var = x
+                  median.var <- median(data.sel[,var])
+                  cutpoint <- median.var
+                  #If the cut.point is equal to 0 then take the mean
+                  if ((cutpoint) == 0){
+                    print(var)
+                    cutpoint <- mean(patient.cell.prop.clin2[,var])
+                  }
+                  return(cutpoint)
+    })
+  })
+names(cutpoints.therapy) <- therapies
+cutpoints.therapy
+```
+
+
+###Cox models indivual cutoffs for IDS and PDS
+```{r}
+formulas <- c('Surv(timelastfu, finalstatus)~ Molecular.profile2 + refage2  + figo_stage2 +',
+              'Surv(daystoprogression, progression)~ Molecular.profile2 + refage2  + figo_stage2 +')
+
+formula.suffix <- c('OS_mprofile_age_figo', 'PFS_mprofile_age_figo')
+
+formula.short.name <- c('OS', 'PFS')
+
+
+for (index in 1:length(formulas)){
+  for (t in therapies){
+    #Calculating cox hazards in in two groups therapy sequence
+    dat <- patient.cell.prop.clin2[(patient.cell.prop.clin2$therapy_sequence %in% t),]
+            
+    #If proportion of cell.type is equal or above the median in the sampled population, then is equal to 1
+    for (j in lymphocites){
+     cut.off.value <- cutpoints.therapy[[t]][names(cutpoints.therapy[[t]]) == j]
+     dat[,j] <- factor(ifelse(dat[,j] > cut.off.value,1,0),levels=c(0,1))
+    }
+    #Calculating cox models
+    Cox.lymphocites <- Cox.regresion.variables2(dat, lymphocites, formula=formulas[index])
+    Cox.lymphocites$Treatment <- t
+    Cox.lymphocites$Cell.type <- rownames(Cox.lymphocites)
+  
+    #Reordering the cox results in an specific way neccesary for the package forestplot
+    spacer <- paste(rep(" ", 20), collapse = " ") #For the forest plot table
+    cox.groups <- Cox.lymphocites
+    df.forest <- NULL
+    for (i in unique(cox.groups$Cell.type)){
+          set.df <- cox.groups[cox.groups$Cell.type %in% i,]
+          set.df$space <- spacer
+          set.df$HR2 <- set.df$HR
+          set.df.reordered <- set.df %>% select(Cell.type, N, HR, space, p.value, HR.confint.lower, HR.confint.upper, HR2)
+          df.forest <- rbind(df.forest, set.df.reordered)
+    }
+    colnames(df.forest)[4] <- ""
+    colnames(df.forest)[3] <- "HR"
+    
+    #Adding * to pvalues lower than 0.05
+    low.pvals <- which(df.forest$p.value < 0.05)
+    df.forest$p.value[low.pvals] <- paste0(df.forest$p.value[low.pvals],"*")
+    df.forest$p.value[which(is.na(df.forest$p.value))] = ""
+    colnames(df.forest)[5] <- "P.val"
+    
+    p <- forest(df.forest[,c(1:5)],
+                est = df.forest$HR2,
+                lower = df.forest$HR.confint.lower, 
+                upper = df.forest$HR.confint.upper,
+                title = paste(formula.short.name[index], t),
+                sizes = 0.5,
+                ci_column = 4,
+                ref_line = 1,
+                xlim = c(0, 1.5),
+                arrow_lab = c("Lower risk", "Higher risk"),
+                ticks_at = c(0.5, 1, 1.5))
+    #print(p)
+    
+    ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_", formula.suffix[index], "_" , t, ".svg"), plot = p,
+                     width = 15, height = 11, units = "cm")
+    ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_", formula.suffix[index], "_" , t, ".png"), plot = p,
+                     width = 15, height = 11, units = "cm")
+    dev.off()
+  }
+}
+```
+
+
+
+###Create multivariable cox model with all the variables significan in the univariable and adding molecular profiles 
+```{r}
+formulas <- c('Surv(timelastfu, finalstatus) ~ .',
+              'Surv(daystoprogression, progression)~ .')
+
+formula.suffix <- c('OS_mprofile_age_figo', 'PFS_mprofile_age_figo')
+
+vars.for.suv <- list(c("timelastfu","finalstatus"),
+                     c("daystoprogression","progression"))
+
+short.surv.name <- c("OS","PFS")
+
+for (index in 1:length(formulas)){
+  for (c in c("IntraCutoff", "GlobalCutoff")){
+    for (t in therapies){
+      dat <- patient.cell.prop.clin2[(patient.cell.prop.clin2$therapy_sequence %in% t),]
+      for (j in lymphocites){
+      if (c == "GlobalCutoff"){
+       cut.off.value<- cutpoints[names(cutpoints) == j]
+      }else{
+       cut.off.value <- cutpoints.therapy[[t]][names(cutpoints.therapy[[t]]) == j]
+      }
+       dat[,j] <- factor(ifelse(dat[,j] > cut.off.value,"high","low"), levels=c("low","high"))
+      }
+      dat <- dat %>% select(c("Molecular.profile2", "refage2" ,  "figo_stage2", lymphocites, vars.for.suv[[index]]))
+      colnames(dat)[1] <- "M.profile"
+      
+      model <- coxph(as.formula(formulas[index]), data=dat)
+      p <- ggforest(model, data = dat, main=paste0(short.surv.name[index],"_", t,"_", c))
+      ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_multivarCox_", formula.suffix[index], "_",
+                                        c, "_", t, ".png"),
+                      plot = p,  width = 15, height = 20, units = "cm")
+    }
+  }
+  
+  
+  dat <- patient.cell.prop.clin2
+  for (j in lymphocites){
+    cut.off.value <- cutpoints[names(cutpoints) == j]
+    #cut.off.value <- cutpoints.therapy[[t]][names(cutpoints.therapy[[t]]) == j]
+    dat[,j] <- factor(ifelse(dat[,j] > cut.off.value,"high","low"), levels=c("low","high"))
+  }
+  
+  
+  dat <- dat %>% select(c("Molecular.profile2", "therapy_sequence", "figo_stage2", "refage2",
+                          lymphocites, vars.for.suv[[index]]))
+  colnames(dat)[1] <- "M.profile"
+  model <- coxph(as.formula(formulas[index]), data=dat)
+  p <- ggforest(model, data = dat, main=paste0(short.surv.name[index], " Multi-therapy Global"))
+  ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_multivarCox_", formula.suffix[index], ".png"), plot = p,
+                     width = 15, height = 20, units = "cm")
+}
+```
+
+```{r}
+
+# lymphocites <- c("CD4.T.cells","CD4.CD45RO.T.cells", "CD4.PD1.T.cells", "T.regs",
+#                  "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells", "B.cells", "CD15.MY",
+#                  "CD11c.MY", "Other.MY")
+
+
+lymphocites2 <- c( "CD11c.MY")
+
+formulas <- c('Surv(timelastfu, finalstatus) ~ .',
+              'Surv(daystoprogression, progression)~ .')
+
+formula.suffix <- c('OS_mprofile_age_figo', 'PFS_mprofile_age_figo')
+
+vars.for.suv <- list(c("timelastfu","finalstatus"),
+                     c("daystoprogression","progression"))
+
+short.surv.name <- c("OS","PFS")
+
+dat <- patient.cell.prop.clin2[patient.cell.prop.clin2$therapy_sequence == "PDS",]
+for (j in lymphocites){
+   cut.off.value<- cutpoints[names(cutpoints) == j]
+   dat[,j] <- factor(ifelse(dat[,j] > cut.off.value,"high","low"), levels=c("low","high"))
+#    dat[,j] <- ntile(dat[,j], 2)
+}
+
+
+dat <- dat %>% select(c("Molecular.profile2", "figo_stage2", "refage2",
+                        lymphocites2, "timelastfu", "finalstatus"))
+
+colnames(dat)[1] <- "M.profile"
+
+model <- coxph(Surv(timelastfu, finalstatus) ~ ., data=dat)
+
+p <- ggforest(model, data = dat, main=paste0("OS Multi-therapy Global"))
+
+print(p)
+```
+```{r}
+dat <- patient.cell.prop.clin2 %>% filter(therapy_sequence == "PDS") %>% select(lymphocites)
+Heatmap(cor(dat), name="Correlation", column_title="PDS")
+
+dat <- patient.cell.prop.clin2 %>% filter(therapy_sequence == "IDS") %>% select(lymphocites)
+Heatmap(cor(dat), name="Correlation", column_title="IDS")
+
+dat <- patient.cell.prop.clin2 %>% select(lymphocites)
+Heatmap(cor(dat), name="Correlation", column_title="All cohort")
+```
+
+
+```{r}
+test.ph <- cox.zph(model)
+test.ph
+#ggcoxzph(test.ph)
+```
+
+
+
 ###Next lines to calculate median the proportion of celltypes by Molecular profiles
 ```{r}
+#Re-organizing data
 melt.patient.cell.prop <- melt(patient.cell.prop)
 
 names(melt.patient.cell.prop) <- c("patient","GlobalCelltype","Proportion")
@@ -438,22 +592,21 @@ melt.patient.cell.prop.clin$GlobalCelltype <- as.vector(melt.patient.cell.prop.c
 #melt.patient.cell.prop.clin$GlobalCelltype[grep("CD8", melt.patient.cell.prop.clin$GlobalCelltype)] <- "CD8.T.cells"
 #melt.patient.cell.prop.clin$GlobalCelltype[grep("CD4", melt.patient.cell.prop.clin$GlobalCelltype)] <- "CD4.T.cells"
 
+#Ignoring Others from heatmap
 melt.patient.cell.prop.clin <- melt.patient.cell.prop.clin[melt.patient.cell.prop.clin$GlobalCelltype != "Other",]
 melt.patient.cell.prop.clin <- melt.patient.cell.prop.clin[melt.patient.cell.prop.clin$Molecular.profile2 != "Other",]
 
 
+#Calculating the median proportion by molecular profile
 med.prop.profile <- melt.patient.cell.prop.clin %>%  group_by(Molecular.profile2, therapy_sequence, GlobalCelltype) %>%
                     summarise(Prop=median(Proportion) * 100)
 
+#Changing data to matrix 
 mt.prop.profile <- med.prop.profile %>% pivot_wider(names_from = GlobalCelltype, values_from = Prop)
 mt.prop.profile <- as.data.frame(mt.prop.profile)
 mt.prop.profile[is.na(mt.prop.profile)] <- 0
 
-#Scaling by therapy sequence
-# mt.prop.scaled <- mt.prop.profile %>% group_by(therapy_sequence) %>% 
-#                   mutate(across(is.numeric, ~ as.numeric(scale(.)))) %>%
-#                   as.data.frame()
-
+#Scaling proportions using z-score
 mt.prop.scaled <- as.data.frame(scale(mt.prop.profile[,c(-1,-2)]))
 mt.prop.scaled$Molecular.profile2 <- mt.prop.profile$Molecular.profile2
 mt.prop.scaled$therapy_sequence <- mt.prop.profile$therapy_sequence
@@ -480,6 +633,36 @@ hmap <- Heatmap(mt.prop.scaled, right_annotation = ha, cluster_columns = FALSE, 
 svg(paste0(output.folder, "Heatmap_Mprofile_ImmuneStromalCancer_prop.svg"), width=8, height=5)
 draw(hmap)
 dev.off()
+
+
+
+#Scaling by therapy sequence
+mt.prop.scaled <- mt.prop.profile %>% group_by(therapy_sequence) %>% 
+                   mutate(across(where(is.numeric), ~ as.numeric(scale(.)))) %>%
+                   as.data.frame()
+
+for (t in c("PDS","IDS")){
+  #Preparing data for creating complex heatmap
+  M.profile.order <- mt.prop.scaled %>% filter(therapy_sequence == {{t}}) %>%
+                                    pull(Molecular.profile2)
+  mt.prop.scaled.sel <- mt.prop.scaled %>% filter(therapy_sequence == {{t}}) %>%
+                                    select(CD4.T.cells, CD4.CD45RO.T.cells, CD4.PD1.T.cells, CD8.effector.T.cells,
+                                           CD8.CD45RO.T.cells, CD8.PD1.T.cells, T.regs, B.cells,
+                                           CD11c.MY, CD163.MP, CD68.MP, Other.MY, Stromal, Cancer)    %>%
+                    as.matrix()
+  
+  
+  colours <- list(M.profile=c("BRCAmut/met" = "#FF0000", "HRD" = "#AB1717", "CCNE1amp"="darkblue", "HRP"="#1E90FF",
+                               "Other"="grey60"))
+  
+  ha = rowAnnotation(M.profile=M.profile.order, col=colours)
+  
+  hmap <- Heatmap(mt.prop.scaled.sel, right_annotation = ha, cluster_columns = FALSE, cluster_rows = FALSE,
+          name="Median proportion \n (Z-score)", column_title = paste0(t," samples"))
+  pdf(paste0(output.folder, "Heatmap_Mprofile_ImmuneStromalCancer_prop_", t, ".pdf"), width=8, height=5)
+  draw(hmap)
+  dev.off()
+}
 ```
 
 #Making violin plots 
