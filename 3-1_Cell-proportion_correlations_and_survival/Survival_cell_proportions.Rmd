@@ -48,22 +48,22 @@ p.vals.markers2 <- function(data, Profile.test="HRD", y.val=25, alt.hypothesis="
 #Reading input
 ```{r}
 #Reading input cell proportion table by patient
-#patient.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Cell-proportions_Heatmaps2/tCycif_cell-proportions-patients.csv", sep=",", header=TRUE)
+#patient.cell.prop <- read.table(file="/home/fernpere/NKI/Analysis_results/01_Cell-proportions_Heatmaps2/tCycif_cell-proportions-patients.csv", sep=",", header=TRUE)
 
-core.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/Proportions_by_core.csv", sep=",", header = TRUE)
+core.cell.prop <- read.table(file="/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/Proportions_by_core.csv", sep=",", header = TRUE)
 
 #Reading clinical info
-core.patient.slide <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt",
+core.patient.slide <- read.table(file="/home/fernpere/NKI/Clinical_intersection/All-slides_cycif2samples.txt",
                                  header = TRUE, sep="\t")
 
 #Reading clinical info
-clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.update.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="/home/fernpere/NKI/Clinical_data/T-CycIF.updated.csv", sep=",", header = TRUE)
 
-Mol.profiles.patients <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
+Mol.profiles.patients <- read.table(file="/home/fernpere/NKI/Tables/Molecular_profiles_patients_20231208.csv",
             sep=",", header=TRUE)
 
-#out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_min3cores/"
-out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians//"
+#out.put.folder <- "/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_min3cores/"
+out.put.folder <- "/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/"
 
 dir.create(out.put.folder, showWarnings = FALSE)
 ```
@@ -160,8 +160,8 @@ cutpoints <- sapply(vars.all, function(x){
 
 #Performing Kapplan-Meir plots for the abundance of each cell.type, according to therapy sequence
 ```{r}
-output.folder = "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/"
-#output.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_min3cores/"
+output.folder = "/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_medians/"
+#output.folder <- "/home/fernpere/NKI/Analysis_results/01_Survival_Proportions_November_min3cores/"
 dir.create(paste0(output.folder))
 
 suffix <- c("PDS","IDS")
@@ -394,8 +394,9 @@ cutpoints.therapy
 ```
 
 
-###Cox models indivual cutoffs for IDS and PDS
+###Univariable Cox models with indivual cell proportion cutoffs for IDS and PDS
 ```{r}
+
 formulas <- c('Surv(timelastfu, finalstatus)~ Molecular.profile2 + refage2  + figo_stage2 +',
               'Surv(daystoprogression, progression)~ Molecular.profile2 + refage2  + figo_stage2 +')
 
@@ -475,6 +476,14 @@ vars.for.suv <- list(c("timelastfu","finalstatus"),
 
 short.surv.name <- c("OS","PFS")
 
+
+# lymphocites <- c("CD4.T.cells","CD4.CD45RO.T.cells", "CD4.PD1.T.cells", "T.regs",
+#                   "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells", "B.cells", "CD15.MY",
+#                   "CD11c.MY", "Other.MY")
+
+lymphocites <- c("CD11c.MY") 
+
+
 for (index in 1:length(formulas)){
   for (c in c("IntraCutoff", "GlobalCutoff")){
     for (t in therapies){
@@ -492,7 +501,7 @@ for (index in 1:length(formulas)){
       
       model <- coxph(as.formula(formulas[index]), data=dat)
       p <- ggforest(model, data = dat, main=paste0(short.surv.name[index],"_", t,"_", c))
-      ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_multivarCox_", formula.suffix[index], "_",
+      ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_REDUCED2_multivarCox_", formula.suffix[index], "_",
                                         c, "_", t, ".png"),
                       plot = p,  width = 15, height = 20, units = "cm")
     }
@@ -512,19 +521,47 @@ for (index in 1:length(formulas)){
   colnames(dat)[1] <- "M.profile"
   model <- coxph(as.formula(formulas[index]), data=dat)
   p <- ggforest(model, data = dat, main=paste0(short.surv.name[index], " Multi-therapy Global"))
-  ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_multivarCox_", formula.suffix[index], ".png"), plot = p,
+  ggplot2::ggsave(filename = paste0(output.folder, "Forest_plot_REDUCED2_multivarCox_", formula.suffix[index], ".png"), plot = p,
                      width = 15, height = 20, units = "cm")
 }
 ```
 
 ```{r}
+library(survcomp)
 
-# lymphocites <- c("CD4.T.cells","CD4.CD45RO.T.cells", "CD4.PD1.T.cells", "T.regs",
-#                  "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells", "B.cells", "CD15.MY",
-#                  "CD11c.MY", "Other.MY")
+c.index.iter <- function(input.dat, prop.training=0.8, formula="Surv(timelastfu, finalstatus) ~ ."){
+    dt <- sort(sample(nrow(input.dat), nrow(input.dat)*.80)) #Selecting rows for training and validation set
+    dat.train <- input.dat[dt,] #Training set
+    dat.val <- input.dat[-dt,] #Validation set
+    #Creating model
+    model <- coxph(as.formula(formula), data=dat.train)
+    predicted_valid <- predict(model, newdata = dat.val, type = "survival")
+    #Removing NAs in predictions. Some predictions were not possible. Also some rows has NA for surv data
+    na.surv <- which(is.na(dat.val$timelastfu) | is.na(dat.val$finalstatus))
+    na.val <- which(is.na(predicted_valid))
+    na.dat <- c(na.val, na.surv)
+    if (length(na.dat > 0)){
+      predicted_valid <- predicted_valid[-na.dat]
+      dat.val <- dat.val[-na.dat,]
+    }
+    #Calculating the C index
+    cindex_val <- concordance.index(predicted_valid, dat.val$timelastfu, dat.val$finalstatus)
+    return(cindex_val$c.index)
+}
 
 
-lymphocites2 <- c( "CD11c.MY")
+
+lymphocites <- c("CD4.T.cells","CD4.CD45RO.T.cells", "CD4.PD1.T.cells", "T.regs",
+                  "CD8.effector.T.cells","CD8.CD45RO.T.cells","CD8.PD1.T.cells", "B.cells", "CD15.MY",
+                  "CD11c.MY", "Other.MY")
+
+
+lymphocites2 <- c("T.regs", "CD4.PD1.T.cells", "CD11c.MY", "CD15.MY", "B.cells")
+
+lymphocites3 <- c("T.regs")
+
+lymphocites4 <- c("CD11c.MY")
+
 
 formulas <- c('Surv(timelastfu, finalstatus) ~ .',
               'Surv(daystoprogression, progression)~ .')
@@ -536,34 +573,60 @@ vars.for.suv <- list(c("timelastfu","finalstatus"),
 
 short.surv.name <- c("OS","PFS")
 
-dat <- patient.cell.prop.clin2[patient.cell.prop.clin2$therapy_sequence == "PDS",]
-for (j in lymphocites){
-   cut.off.value<- cutpoints[names(cutpoints) == j]
-   dat[,j] <- factor(ifelse(dat[,j] > cut.off.value,"high","low"), levels=c("low","high"))
-#    dat[,j] <- ntile(dat[,j], 2)
+df.cindex <- data.frame()
+vars.name <- c("complete", "reduced", "reduced2")
+vars.to.test <- list(lymphocites, lymphocites2, lymphocites3, lymphocites4)
+for (m in 1:4){
+  var.sel <- vars.to.test[[m]]
+  var <- vars.name[m]
+  for (t in "PDS"){
+    if (t == "All"){
+      dat <- patient.cell.prop.clin2
+      dat <- dat %>% select(c("Molecular.profile2", "figo_stage2", "refage2", "therapy_sequence",
+                          var.sel, "timelastfu", "finalstatus"))
+    }else{
+      dat <- patient.cell.prop.clin2[patient.cell.prop.clin2$therapy_sequence == t,]
+      dat <- dat %>% select(c("Molecular.profile2", "figo_stage2", "refage2",
+                          var.sel, "timelastfu", "finalstatus"))
+    }
+  colnames(dat)[1] <- "M.profile"
+  for (j in var.sel){
+     cut.off.value<- cutpoints[names(cutpoints) == j]
+     dat[,j] <- factor(ifelse(dat[,j] > cut.off.value,"high","low"), levels=c("low","high"))
+  }
+  c.indexes <- sapply(1:400, function(x){c.index.iter(dat)})
+  c.indexes <- c.indexes[!is.na(c.indexes)]
+  df.iter <- data.frame(C.index=c.indexes, Model=paste0(t,"_",var))
+  df.cindex <- rbind(df.cindex, df.iter)
+  }
+}
+```
+
+
+```{r}
+p <- ggplot(df.cindex, aes(x=Model, y=C.index)) + 
+  geom_boxplot(fill=NA, width = 0.1) +  geom_violin(fill=NA)  + theme_bw() + ylab("C.index validation sets")
+print(p)
+ggsave(filename = paste0(output.folder,"Boxplots_Cindex_PDS.png"), units = "cm", height = 10, width = 10)
+```
+
+#Calculating correlation between cell type proportions
+```{r}
+cols.fun= circlize::colorRamp2(c(0, 1), c("blue","yellow"))
+
+for (t in therapies){
+  dat <- patient.cell.prop.clin2 %>% filter(therapy_sequence == {{t}}) %>% select(lymphocites)
+  hmap <- Heatmap(cor(dat), name="Correlation", column_title=t, col = cols.fun)
+  png(paste0(output.folder, "Heatmap_cellprop_correlations_",t,".png"), units="cm", width=16, height=14, res=800)
+  draw(hmap)
+  dev.off()
 }
 
-
-dat <- dat %>% select(c("Molecular.profile2", "figo_stage2", "refage2",
-                        lymphocites2, "timelastfu", "finalstatus"))
-
-colnames(dat)[1] <- "M.profile"
-
-model <- coxph(Surv(timelastfu, finalstatus) ~ ., data=dat)
-
-p <- ggforest(model, data = dat, main=paste0("OS Multi-therapy Global"))
-
-print(p)
-```
-```{r}
-dat <- patient.cell.prop.clin2 %>% filter(therapy_sequence == "PDS") %>% select(lymphocites)
-Heatmap(cor(dat), name="Correlation", column_title="PDS")
-
-dat <- patient.cell.prop.clin2 %>% filter(therapy_sequence == "IDS") %>% select(lymphocites)
-Heatmap(cor(dat), name="Correlation", column_title="IDS")
-
 dat <- patient.cell.prop.clin2 %>% select(lymphocites)
-Heatmap(cor(dat), name="Correlation", column_title="All cohort")
+hmap <- Heatmap(cor(dat), name="Correlation", column_title="All cohort", col = cols.fun)
+png(paste0(output.folder, "Heatmap_cellprop_correlations_all.png"), units="cm", width=16, height=14, res=800)
+draw(hmap)
+dev.off()
 ```
 
 
