@@ -19,10 +19,10 @@ out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN/"
 
 #Reading clinical info
 ```{r}
-cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
-clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.csv", sep=",", header = TRUE)
+cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt", sep="\t", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.update.csv", sep=",", header = TRUE)
 
-clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
+clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL", all.x = TRUE)
 
 #Merging clinical data with shallowHRD
 shallowHRDresults <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/shallowHRD_summary_table.csv", header=TRUE, sep=",")
@@ -36,7 +36,7 @@ IDs <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/sample_
 RCN.proportions.image <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN/RCN_by_image.csv", sep=",",header = TRUE)
 ```
 
-#Merging clinical info with shallowHRD and creating new Molecular merker
+#Merging clinical info with shallowHRD and creating new Molecular marker
 ```{r}
 colnames(shallowHRDresults)[3] <- "ShallowHRDcall"
 
@@ -71,7 +71,7 @@ clindata.shrd.patient <- unique(clindata.shrd[,colmns.interest])
 
 Molecular.profiles.new <- clindata.shrd.patient %>% select(patient, Molecular.profile2, therapy_sequence)
 write.table(Molecular.profiles.new,
-            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231123.csv",
+            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
             sep=",", row.names=FALSE)
 ```
 

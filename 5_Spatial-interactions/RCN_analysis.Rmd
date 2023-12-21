@@ -31,7 +31,7 @@ cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_scimap-fo
 rcn.folder <- "Analysis_results/Spatial_analysis/"
 input.prefix <- "Cluster_ids_"
 excluding.pattern <- "Cluster_ids_metaclusters"
-input.sufix <- "_k35.csv"
+input.sufix <- "_k30.csv"
 project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
 output.napari <- "RCN_Napary"
 

@@ -10,7 +10,7 @@ library(reshape2)
 library(ggplot2)
 library(gridExtra)
 library(ggpubr)
-library(CytoTree)
+#library(CytoTree)
 library(flowCore)
 library(stringr)
 library("dplyr")
@@ -114,27 +114,30 @@ scale.dataset <- function(dataset, channels, last.antibody.channel=11, norm.by=N
 }
 
 #Running FloWSOM and 
-som.metaclustering.consensus <- function(dataset, kval=10, tempdir){
+som.metaclustering.consensus <- function(dataset, max.kval =12, tempdir){
 dir.create(tempdir)
+print("Starting FLOWSOM")
 out.som <- FlowSOM::ReadInput(dataset, transform = FALSE, scale = FALSE)
-out.som <- FlowSOM::BuildSOM(out.som, colsToUse = colnames(dataset), silent=T, xdim=90, ydim=90)
+out.som <- FlowSOM::BuildSOM(out.som, colsToUse = colnames(dataset), silent=T, xdim=50, ydim=50)
 out.som <- FlowSOM::BuildMST(out.som, silent=T)
+print("Starting consensus clustering")
 out.results <- suppressMessages(ConsensusClusterPlus::ConsensusClusterPlus(t(out.som$map$codes),
-        maxK = 12, reps = 300, pItem = 0.9, pFeature = 1, title = tempdir, 
-        plot = "png", verbose = FALSE, clusterAlg = "hc", 
-        distance = "euclidean", seed = 10))
-metaclusters <- out.results[[kval]]$consensusClass
-return(metaclusters[out.som$map$mapping[,1]])
+        maxK = max.kval, reps = 500, pItem = 0.8, pFeature = 0.9, title = tempdir, 
+        plot = "png", verbose = FALSE, clusterAlg = "pam", 
+        distance = "euclidean", seed = 81))
+#metaclusters <- out.results[[kval]]$consensusClass
+#return(metaclusters[out.som$map$mapping[,1]])
+return(list(out.results,out.som))
 }
 ```
 
-#Metaclustering of the cells
+#Running SOM and consensus clustering for the stromal and cancer cells
 
 ```{r}
 ###############Metaclustering of the cells###########
 
 #Channels used for the metaclustering
-interesting.channels.stromal <- c("pTBK1","Ki67","Vimentin", "pSTAT1", "MHCI",
+interesting.channels.stromal <- c("pTBK1","Ki67","Vimentin", "pSTAT1", "MHCI", 
                       "ECadherin","aSMA","PDL1_488","Area","Eccentricity","Roundness")
 
 interesting.channels.cancer <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin","yH2AX",
@@ -143,21 +146,38 @@ interesting.channels.cancer <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin"
 
 
 #Scaling datasets
-mat.stromal <- scale.dataset(dat.stromal, interesting.channels.stromal,
-                             last.antibody.channel = 8, norm.by = "cycif.slide")
-  
-mat.cancer <- scale.dataset(dat.cancer, interesting.channels.cancer,
-                             last.antibody.channel = 10, norm.by = "cycif.slide")
+#mat.stromal <- scale.dataset(dat.stromal, interesting.channels.stromal,
+#                             last.antibody.channel = 8, norm.by = "cycif.slide")
+
+#mat.cancer <- scale.dataset(dat.cancer, interesting.channels.cancer,
+#                             last.antibody.channel = 10, norm.by = "cycif.slide")
 
 #Directories where to store the consensus clustering plots of the SOM nodes
-tmpdir.cancer <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November/SOM_consensusClusters_cancer/"
-tmpdir.stromal <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November/SOM_consensusClusters_stromal/"
+tmpdir.cancer <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November/SOM_consensusClusters_cancer2/"
+tmpdir.stromal <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November/SOM_consensusClusters_stromal2/"
 
-metalabels.cancer <- som.metaclustering.consensus(mat.cancer, kval = 5,
-                                                  tmpdir.cancer)
-metalabels.stromal <- som.metaclustering.consensus(mat.stromal, kval = 5,
-                                                   tmpdir.stromal)
+som.consensus.cancer <- som.metaclustering.consensus(mat.cancer, tempdir=tmpdir.cancer)
+som.consensus.stromal <- som.metaclustering.consensus(mat.stromal, tempdir=tmpdir.stromal)
 ```
+
+#Selecting the number of metaclusters according to the results of consensus clustering
+```{r}
+k.stromal <- 2
+k.cancer <- 4
+
+consensus.cancer <- som.consensus.cancer[[1]]
+som.cancer <- som.consensus.cancer[[2]]
+consensus.cancer.k <- consensus.cancer[[k.cancer]]$consensusClass
+
+consensus.stromal <- som.consensus.stromal[[1]]
+som.stromal <- som.consensus.stromal[[2]]
+consensus.stromal.k <- consensus.stromal[[k.stromal]]$consensusClass
+
+#Extraction of metaclusters ids per cell
+metalabels.stromal <- consensus.stromal.k[som.stromal$map$mapping[,1]]
+metalabels.cancer <- consensus.cancer.k[som.cancer$map$mapping[,1]]
+```
+
 
 ```{r}
 #A big function to plot UMAPs, downscaling dataset
@@ -249,7 +269,7 @@ dat.stromal.clin2 <- merge(mat.stromal2, clin.tcycif, by = c("cycif.slide", "cyc
 
 #For Min.Max normalization after Z-score
 mat.stromal2 <- scale.dataset(dat.stromal.clin2, interesting.channels.stromal,
-                             last.antibody.channel = 9, norm.by = "cycif.slide")
+                             last.antibody.channel = 8, norm.by = "cycif.slide")
 
 mat.cancer2 <- scale.dataset(dat.cancer.clin2, interesting.channels.cancer,
                              last.antibody.channel = 10, norm.by = "cycif.slide")
@@ -271,17 +291,17 @@ ind.plots.stromal = index_plots(mat.stromal2, mat.stromal2,
                         scaling = "NONE", log2.transform = FALSE,
                         GlobalCellType = "Metacluster.ID")
 
-#Saving heatmaps
-pdf(file= paste0(outout.folder.name,"/Metaclusters_Cancer_Heatmap_20230401.pdf"), height = 8, width = 10)
+#Saving heatmaps with Z-score plus min-max normalization
+pdf(file= paste0(outout.folder.name,"/Metaclusters_Cancer_Heatmap_MinMax.pdf"), height = 8, width = 10)
 print(ind.plots.cancer[[3]])
 dev.off()
 
-#Saving heatmaps
-pdf(file= paste0(outout.folder.name,"/Metaclusters_Stromal_Heatmap_20230401.pdf"), height = 8, width = 10)
+#Saving heatmaps with Z-score plus min-max normalization
+pdf(file= paste0(outout.folder.name,"/Metaclusters_Stromal_Heatmap_MinMax.pdf"), height = 8, width = 10)
 print(ind.plots.stromal[[3]])
 dev.off()
 
-#Only for Z-score normalization
+#Performing Z-score normalization and no min.max
 mat.stromal3 <- scale.dataset(dat.stromal.clin2, interesting.channels.stromal,
                              last.antibody.channel = 9, norm.by = "cycif.slide", min.max = FALSE)
 
@@ -305,13 +325,13 @@ ind.plots.stromal = index_plots(mat.stromal3, mat.stromal3,
                         scaling = "NONE", log2.transform = FALSE,
                         GlobalCellType = "Metacluster.ID")
 
-#Saving heatmaps
+#Saving heatmaps for Z-score scaling only
 pdf(file= paste0(outout.folder.name,"/Metaclusters_Cancer_Heatmap_Zscore.pdf"),
     height = 8, width = 10)
 print(ind.plots.cancer[[3]])
 dev.off()
 
-#Saving heatmaps
+#Saving heatmaps for Z-score scaling only
 pdf(file= paste0(outout.folder.name,"/Metaclusters_Stromal_Heatmap_Zscore.pdf"),
     height = 8, width = 10)
 print(ind.plots.stromal[[3]])
@@ -491,7 +511,6 @@ for (i in unique(mat.stromal2$cycif.slide)){
 
 ```{r}
 #Merging results and writing them in tables
-
 dat.immune.others <- big.data.set %>% dplyr::filter(GlobalCellType != "Cancer",
                                                     !grepl("Stromal", GlobalCellType))
 
@@ -526,8 +545,13 @@ head(big.data.set.subtypes)
 
 ```{r}
 #Writing results
-write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info_20231028.csv", big.data.set.subtypes, sep=",",
+write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info_20231129.csv", big.data.set.subtypes, sep=",",
             row.names=FALSE)
+```
+
+
+```{r}
+
 ```
 
 
@@ -545,12 +569,12 @@ aux$CellId <- paste0(big.data.set.subtypes$imageid, "_c", big.data.set.subtypes$
 aux1 <- aux %>% select(imageid, CellId, DNA1, Area, Eccentricity, Perimeter, Roundness, X_position,
                       Y_position, GlobalCellType)
 
-write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_scimap-format_columns-reduced_20231028.csv", aux1, sep=",",
+write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_scimap-format_columns-reduced_20231129.csv", aux1, sep=",",
             row.names=FALSE)
 
 aux1$GlobalCellType[grep("Stromal", aux$GlobalCellType)] <- aux$SubCelltype[grep("Stromal", aux$GlobalCellType)]
 aux1$GlobalCellType[grep("Cancer", aux$GlobalCellType)] <- aux$SubCelltype[grep("Cancer", aux$GlobalCellType)]
-write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format1_20231028.csv", aux1, sep=",",
+write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format1_20231129.csv", aux1, sep=",",
             row.names=FALSE)
 
 
@@ -560,7 +584,7 @@ aux$GlobalCellType[grep("CD8.T.cells", aux$GlobalCellType)] <- aux$SubCelltype[g
 aux2 <- aux %>% select(imageid, CellId, DNA1, Area, Eccentricity, Perimeter, Roundness, X_position,
                       Y_position, GlobalCellType)
 
-write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format2_20231028.csv", aux2, sep=",",
+write.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format2_20231129.csv", aux2, sep=",",
             row.names=FALSE)
 
 rm(aux1)
@@ -571,6 +595,6 @@ rm(aux2)
 #Counting how many subtype cells are per core and saving results in table
 big.data.set.subtypes.numbers  <- big.data.set.subtypes %>% group_by(imageid, SubCelltype) %>% summarise(N = n())
 
-write.table(file=paste0(outout.folder.name, "Metaclusters_abundance_per_core_20231028.csv"), big.data.set.subtypes.numbers,
+write.table(file=paste0(outout.folder.name, "Metaclusters_abundance_per_core_20231129.csv"), big.data.set.subtypes.numbers,
             sep=",", row.names=FALSE)
 ```
