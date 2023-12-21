@@ -20,12 +20,15 @@ output.folder = "D:/users/fperez/NKI_TMAs_AF/Analysis_results/"
 tribus.subfolder = "Tribus_Cell-segment_202311/"
 celltypes.file.suffix = "_cellTypes.csv"
 CellTypes2ignore = c("InsideROI", "LostCell", "LowDapi", "Out.of.core")
-clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.updated.csv", sep=",", header = TRUE)
 cores2ignore1 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_cores_to_ignore.csv", sep=",")
 cores2ignore2 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_extra-cores_to_ignore.csv",
                             sep = ",", header = TRUE)
 cores2ignore3 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_cores_to_ignore_extra3.csv",
                             sep = ",", header = TRUE)
+
+Mol.profiles.patients <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
+            sep=",", header=TRUE)
 
 cores2ignore3 <- cores2ignore3[,c(1,2)]
 cores2ignore2 <- cores2ignore2[,-3]
@@ -53,8 +56,9 @@ cols <- sapply(1:nrow(cores2ignore), function(x){
 
 samples2cycif.sel <- samples2cycif[-sort(unlist(cols)),] #Ignoring cores that do not passed QC
 samples2cycif.sel <- samples2cycif.sel[which(samples2cycif.sel$patient != "OC liver"),] #Ignoring control samples
-samples2cycif.dat <- merge(samples2cycif.sel, clinical.info, by.x="patient", by.y="TnumberAVL")
+samples2cycif.dat <- merge(samples2cycif.sel, clinical.info, by.x="patient", by.y="TnumberAVL" ,all.x = TRUE)
 ```
+
 
 #Reading input tCycif data and cell.type data
 ```{r}
@@ -95,6 +99,7 @@ merged.dat <- merge(big.data.set, samples2cycif.dat.sel, by=c("cycif.slide","cyc
 merged.dat$GlobalCellType[grep("Stromal", merged.dat$GlobalCellType, ignore.case = TRUE)] <- "Stromal"
 merged.dat[merged.dat$GlobalCellType == "Other", "GlobalCellType"] <- "Others"
 ```
+
 
 
 ##Number of cores by patient
@@ -143,7 +148,7 @@ colnames(merged.types.patients)[c(1,2)] <- c("Patient","Cell.type")
 
 p <- ggplot(merged.types.patients, aes(x=Patient, y=Proportion, fill=Cell.type)) +
         geom_bar(stat="identity") + theme_classic() +
-        scale_fill_manual(values = c("#e600e6", "#FF7F00", "#2F82B9", "#e6c200", "grey")) +
+        scale_fill_manual(values = c("#cd00cd", "#FF7F00", "#2F82B9", "#e6c200", "grey")) +
         theme(axis.text.x=element_text(size=rel(0.2), angle = 65, hjust = 1), legend.position="top",
               legend.text = element_text(size=7), legend.key.size = unit(0.4, 'cm'),  legend.title = element_text(size=5))
 print(p)
@@ -269,6 +274,28 @@ scaling.sampling <- function(datain, channels, nsampling, slide.name="cycif.slid
                   dat.scaled.glob <- scaled.data2[rows.to.sample,]
                   Global.types <- datain %>% slice(rows.to.sample) %>% pull(GlobalCellType)
                   return(list(dat.scaled.glob,Global.types))
+}
+
+
+
+scaling.sampling2 <- function(datain, channels, slide.name="cycif.slide"){
+                  slide.name2 <- ensym(slide.name)
+                  dat.log2 <- datain[,c(channels,slide.name)]
+                  dat.log2[,channels] <- log2(dat.log2[,channels])
+                  #Scaling by slide
+                  scaled.data <- sapply(unique(dat.log2[,slide.name]), function(x){
+                    dat.slide <- dat.log2 %>% filter({{slide.name2}} == x) %>% select(-{{slide.name2}}) %>% as.matrix()
+                    quantiles <- apply(dat.slide, 2, function(x){quantile(x,c(0.01, 0.99))})
+                    for (x in colnames(dat.slide)){
+                      dat.slide[,x][which(dat.slide[,x] <= quantiles[1,x])] = quantiles[1,x]
+                      dat.slide[,x][which(dat.slide[,x] >= quantiles[2,x])] = quantiles[2,x]
+                    } 
+                    as.matrix(scale(dat.slide))
+                  })
+                  scaled.data2 <- NULL #Concatenating
+                  for (i in 1:length(scaled.data)){ scaled.data2 <- rbind(scaled.data2, scaled.data[[i]])}
+                  rm(scaled.data)
+                  return(scaled.data2)
               }
 ```
 
@@ -277,13 +304,13 @@ scaling.sampling <- function(datain, channels, nsampling, slide.name="cycif.slid
 ```{r}
 set.seed(42) #For reproducibility 
 #Channels for global.cell types umaps
-global.channels.UMAPs <- c("CD3d","CD8a","CD4","FOXP3","CD68", "MHCII", "aSMA", "Vimentin",
+global.channels.UMAPs <- c("CD3d","CD8a","CD4","FOXP3","CD68", "MHCII", "aSMA", "Vimentin", "CD31",
                                 "CD163","CD207","CD11c", "CK7","ECadherin","PD1","CD45RO")
 immune.channels.UMAPs <- c("CD3d","CD8a","CD4","FOXP3","CD68", "MHCII", "CD15",
                            "CD11b", "CD20", "CD163","CD207","CD11c", "PD1","CD45RO")
 N.sampling = 50000 #Number of cells to sample for UMAP
 
-global.colors <- c("#e600e6", "#FF7F00", "#2F82B9", "#e6c200", "grey") #Global.celltypes
+global.colors <- c("#cd00cd", "#FF7F00", "#2F82B9", "#e6c200", "grey") #Global.celltypes
 
 myloid.colors  <- c("#ade6e6", "#add8e6", "#0095b6", "#2F82B9", "#8DC594", "#62B74F")
 lymphocite.colors <- c("#e4717a", "#E94330", "#ff0000", "#ff6e4a", "#FF7F00", "#FDB661", "yellow")
@@ -329,44 +356,42 @@ immune.uplot = data.frame(x = umap.immune[,1], y= umap.immune[,2])
 #Plotting UMAPs
 ```{r}
 #Plotting UMAP for immune cells
-l = ggplot(immune.uplot,aes(x,y, color=types.sampled.immune))+ geom_point(size=0.4, stroke=0, alpha=0.7)+ 
-    geom_density_2d(color="grey60", alpha=0.6, size = 0.25) +
-    scale_fill_viridis(discrete = TRUE) + 
-    guides(color = guide_legend(override.aes = list(size=5))) + 
+l = ggplot(immune.uplot,aes(x,y, color=types.sampled.immune))+ geom_point(size=0.4, stroke=0, alpha=0.7)+
+    #geom_density_2d(color="grey60", alpha=0.6, size = 0.25) +
+    scale_fill_viridis(discrete = TRUE) +
+    guides(color = guide_legend(override.aes = list(size=5))) +
     scale_color_manual(values=immune.colors) + theme_bw() + coord_fixed(ratio=1) +
     guides(colour = guide_legend(override.aes = list(size=4, shape=15, alpha=1), label.position="bottom",
-                                 direction="horizontal", ncol=2,  byrow=F)) + 
-    xlab("umap1") + ylab("umap2") + xlim(-9.25, 8) + ylim(-11.85,11.25) + 
+                                 direction="horizontal", ncol=2,  byrow=F)) +
+    xlab("umap1") + ylab("umap2") + #xlim(-10.1, 9.25) + ylim(-10.2,10.2) +
     theme(legend.position="right", legend.text = element_text(size=6), legend.spacing.x = unit(0.05, 'cm'),
           legend.spacing.y = unit(0.06, 'cm'), legend.key.size = unit(0.4, 'cm'), legend.title = element_blank(),
           aspect.ratio=1)
 print(l)
 ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Immunes.svg"),
-        width = 16, height = 8, units = "cm")
+         width = 16, height = 8, units = "cm")
 ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Immunes.png"),
-        width = 16, height = 8, units = "cm")
+         width = 16, height = 8, units = "cm")
 
 
-#Plotting UMAP for global cell types
-l = ggplot(global.uplot,aes(x,y, color=types.sampled.global))+ geom_point(size=0.4, stroke=0, alpha=0.7)+ 
-    geom_density_2d(color="grey60", alpha=0.6, size = 0.25) +
-    scale_fill_viridis(discrete = TRUE) + 
-    guides(color = guide_legend(override.aes = list(size=5))) + 
+# #Plotting UMAP for global cell types
+l = ggplot(global.uplot,aes(x,y, color=types.sampled.global))+ geom_point(size=0.4, stroke=0, alpha=0.7)+
+    #geom_density_2d(color="grey60", alpha=0.6, size = 0.25) +
+    scale_fill_viridis(discrete = TRUE) +
+    guides(color = guide_legend(override.aes = list(size=5))) +
     scale_color_manual(values=global.colors) + theme_bw() + coord_fixed(ratio=1) +
     guides(colour = guide_legend(override.aes = list(size=4, shape=15, alpha=1), label.position="bottom",
-                                 direction="horizontal", ncol=1,  byrow=F)) + 
-    xlab("umap1") + ylab("umap2") + xlim(-11, 9) + ylim(-8,11.1) + 
+                                 direction="horizontal", ncol=1,  byrow=F)) +
+    xlab("umap1") + ylab("umap2") + # xlim(-9.5, 10) + ylim(-11.1, 7.5) +
     theme(legend.position="right", legend.text = element_text(size=7), legend.spacing.x = unit(0.05, 'cm'),
           legend.spacing.y = unit(0.06, 'cm'), legend.key.size = unit(0.5, 'cm'), legend.title = element_blank(),
           aspect.ratio=1)
 print(l)
 ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Global-celltypes.svg"),
-         width = 16, height = 8, units = "cm")
-ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Global-celltypes.png"),
-         width = 16, height = 8, units = "cm")
+          width = 16, height = 8, units = "cm")
+ ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Global-celltypes.png"),
+          width = 16, height = 8, units = "cm")
 ```
-
-
 
 #Calculating proportion of cells by patient and plotting boxplots
 ```{r}
@@ -424,6 +449,8 @@ ggsave(p1, filename = paste0(output.folder, out.put.subfolder, "Proportions-tota
 ggsave(p2, filename = paste0(output.folder, out.put.subfolder, "Proportions-total-boxplot_cut.png"), width = 15, height = 9, units = "cm")
 ggsave(p2, filename = paste0(output.folder, out.put.subfolder, "Proportions-total-boxplot_cut.svg"), width = 15, height = 9, units = "cm")
 ```
+
+
 
 #Box plot for concordance between B.cells in t.Cycif and CD20 in IHC
 ```{r}
@@ -522,7 +549,7 @@ rm(aux.dat)
 
 #Saving the proportion of cell by core
 ```{r}
-out.put.subfolder="01_Survival_Proportions_November_medians"
+out.put.subfolder="01_Survival_Proportions_November_medians/"
 core.percentages <- merged.dat %>% group_by(patient, cycif.core.id, GlobalCellType) %>%
                     summarise(n = n()) %>%
                     mutate(Proportion = n / sum(n))
