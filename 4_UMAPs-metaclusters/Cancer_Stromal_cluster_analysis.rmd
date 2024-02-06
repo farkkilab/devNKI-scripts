@@ -146,11 +146,11 @@ interesting.channels.cancer <- c("Ki67","Vimentin","pSTAT1", "MHCI", "ECadherin"
 
 
 #Scaling datasets
-#mat.stromal <- scale.dataset(dat.stromal, interesting.channels.stromal,
-#                             last.antibody.channel = 8, norm.by = "cycif.slide")
+mat.stromal <- scale.dataset(dat.stromal, interesting.channels.stromal,
+                             last.antibody.channel = 8, norm.by = "cycif.slide")
 
-#mat.cancer <- scale.dataset(dat.cancer, interesting.channels.cancer,
-#                             last.antibody.channel = 10, norm.by = "cycif.slide")
+mat.cancer <- scale.dataset(dat.cancer, interesting.channels.cancer,
+                             last.antibody.channel = 10, norm.by = "cycif.slide")
 
 #Directories where to store the consensus clustering plots of the SOM nodes
 tmpdir.cancer <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/02_MetaClusters_November/SOM_consensusClusters_cancer2/"
