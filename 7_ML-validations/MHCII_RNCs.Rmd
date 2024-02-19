@@ -1,0 +1,250 @@
+---
+title: "MHCII expression in RCNs"
+output: html_notebook
+---
+
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+library("dplyr")
+library(ComplexHeatmap)
+library(tidyr)
+library(paletteer)
+library(vegan)
+library(circlize)
+
+source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/5_Spatial-interactions/RCN_inspection_functions.R")
+```
+
+
+
+
+#Reading clinical info
+```{r}
+rcn.folder <- "Analysis_results/03_RCN/"
+input.prefix <- "Cluster_ids_metaclustersmerged_"
+project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
+output.napari <- "RCN_Napary2023_2"
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN_2024/"
+method.rcn <- "radious46_k30"
+
+
+cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.updated.csv", sep=",",
+                            header = TRUE)
+
+clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
+
+#Loading Molecular profiles
+M.profiles <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
+             sep=",", header = TRUE)
+
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/"
+
+```
+
+
+#Merging M.profile info with tCycif core ID
+```{r}
+M.profiles.clin  <- merge(M.profiles, cycif2samples, by="patient")
+M.profiles.clin$imageid <- paste(M.profiles.clin$cycif.slide, M.profiles.clin$cycif.core.id, sep="_")
+M.profiles.clin <- M.profiles.clin %>% select(patient,Molecular.profile2,therapy_sequence,imageid)
+M.profiles.clin
+```
+
+
+#Reading input RCN table file
+```{r}
+#Reading RCN id per cell
+RCN.clusters <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/Spatial_analysis/Cluster_ids_radius46_k40_metaclusters_20240113.csv", header = TRUE, sep=",")
+
+#Next lines to rename the RNC id according to the abundance. So, RCN=1 would be the most abundant 
+RCN.order <- order(table(RCN.clusters[,2]), decreasing = TRUE)
+RCN.order.values <- sapply(1:length(RCN.order), function(x){which(RCN.order == x)})
+RCN.clusters[,2] <- RCN.order.values[c(RCN.clusters[,2] + 1)]
+
+#Reading the merged RCNs ids
+RCN.annotations <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN_2024_metaclusters/Merged_RCNs.csv",
+                              sep=",",header=TRUE)
+
+#Adding an RCNid number of the merged RCNs
+RCN.c.ids <- paste0("RCN", sprintf('%0.2d',1:length(unique(RCN.annotations$RCN_name))))
+names(RCN.c.ids) <- unique(RCN.annotations$RCN_name)
+
+RCN.c.ids.all <- sapply(RCN.annotations$RCN_name, function(x){
+      RCN.c.ids[which(x == names(RCN.c.ids))]
+})
+
+RCN.annotations$RCN.id.collapsed <- RCN.c.ids.all
+RCN.annotations$RCN_id <- as.integer(gsub("RCN","",RCN.annotations$RCN_id))
+
+
+#Next lines to rename the RNC id according to the abundance. So, RCN=1 would be the most abundant 
+RCN.order <- order(table(RCN.annotations[RCN.clusters$spatial_kmeans,"RCN.id.collapsed"]), decreasing = TRUE)
+new.rcn.order <- paste0("RCN", sprintf('%0.2d',1:length(unique(RCN.annotations$RCN.id.collapsed))))
+names(new.rcn.order) <- unique(RCN.annotations$RCN.id.collapsed)[RCN.order]
+
+RCN.annotations$RCN.id.collapsed.ordered <- new.rcn.order[RCN.annotations$RCN.id.collapsed]
+RCN.annotations
+```
+
+
+
+##Re-naming the RCN accordint to the RNC group they belong
+```{r}
+#New names
+new.vals <- c("RCN01", "RCN02", "RCN03","RCN04", "RCN05", "RCN06","RCN07", "RCN08", "RCN09","RCN10",
+          "RCN11", "RCN12", "RCN13", "RCN14")
+
+#Original names, with the order according to the groups
+order <- c("RCN01", "RCN03", "RCN11", "RCN02", "RCN05", "RCN06", "RCN09", "RCN12", "RCN04", "RCN07",
+               "RCN08", "RCN10", "RCN13", "RCN14")
+
+names(new.vals) <- order
+RCN.annotations$RCN.id.collapsed.ordered <- new.vals[RCN.annotations$RCN.id.collapsed.ordered]
+```
+
+
+#Reading big dataset with signal intensity per cell.type
+```{r}
+cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info_20231129.csv",
+                    header = TRUE, sep=",")
+```
+
+#Adding to cell table the RCNid
+```{r}
+cells.aux <- cells
+
+#Order of RCN for plotting
+RNC.order <- c("RCN01", "RCN02", "RCN03", "RCN04","RCN05","RCN06", "RCN07","RCN08", "RCN09", "RCN10",
+                "RCN11", "RCN12", "RCN13", "RCN14")
+
+
+#Adding the merged RCNid to the cells
+cells.aux$rcn_id <- RCN.annotations[RCN.clusters$spatial_kmeans,"RCN.id.collapsed.ordered"]
+cells.aux$rcn_id <- factor(cells.aux$rcn_id, levels = RNC.order)
+```
+
+#Selecting only cancer cells for analysis and from cancer rich RCNs
+```{r}
+#Selecting only cancer cells
+cancers <- cells.aux %>% filter(GlobalCellType == "Cancer",
+                                rcn_id %in% c("RCN04","RCN05","RCN06","RCN07","RCN08","RCN09","RCN10"))
+
+#Merging cells ids with patient.id 
+cancers.pat <- merge(cancers, cycif2samples, by=c("cycif.slide","cycif.core.id"))
+
+#Merging cells ids with clinical info
+cancers.clin <- merge(cancers.pat, M.profiles.clin, by="patient")
+
+cancers.clin$Molecular.profile2 <- factor(cancers.clin$Molecular.profile2,
+                                          levels=c("BRCAmut/met","HRD","HRP","CCNE1amp","Other"))
+```
+
+
+
+#Violing plots for MHCII expression per RCN in PDS, BRCAloss, cancer cells
+```{r}
+rnc_mycolors <- c("#FFE4C4", "tan", "#FFE4C4", "#ffc1ff", "#b400b4", "#f7f0f7","#ffc1ff","#ff4eff",
+              "#FFE4C4","#ff3333","#ff6e4a", "#00ffff","#8a2be2","#00d800")
+
+mycolors <- c("#ffc1ff", "#b400b4", "#f7f0f7","#ffc1ff","#ff4eff",
+              "#FFE4C4","#ff3333","#ff6e4a", "#00ffff","#8a2be2","#00d800")
+
+
+cancers.pds <- cancers.clin %>% filter(!grepl("NACT",therapy_sequence),
+                                       !is.na(therapy_sequence),
+                                       Molecular.profile2 == "BRCAmut/met")
+
+df <- cancers.pds
+
+#P.value that RNC05 expression is different from RCN04
+pval.1 <- wilcox.test(df[df$rcn_id == "RCN05","MHCII"],
+         df[df$rcn_id == "RCN08","MHCII"])
+print(pval.1$p.value)
+
+#P.value that RNC05 expression is different from RCN04
+pval.2 <- wilcox.test(df[df$rcn_id == "RCN10","MHCII"],
+         cancers[df$rcn_id == "RCN09","MHCII"])
+
+
+p <- ggplot(df, aes(x=rcn_id, y=log2(MHCII))) +
+        geom_violin(aes(fill=rcn_id)) + geom_boxplot(fill=NA, width=0.1, outlier.shape = NA) +
+        stat_summary(geom = "errorbar", fun.y = "median", aes(ymax = ..y.., ymin = ..y..), width=0.6, size = 0.8) + 
+        theme_bw() + xlab("RCNid") + ylab("log2(MHCII) in cancer cells") +
+        theme(axis.text.x = element_text(angle = 45, vjust = 1.1, hjust=1, size=rel(1.2)),
+              axis.text.y = element_text(size=rel(1.2)),
+              axis.title.y = element_text(size=rel(1.2)),
+              axis.title.x = element_blank(),
+              legend.text = element_text(size=rel(1.2))) +
+        scale_fill_manual(values = mycolors) + ylim(9.5,17)
+print(p)
+ggsave(p, filename = paste0(out.folder.name,"/MHCII_expression_RNCs_BRCAmut_PDS.svg"),
+       height = 10, width = 16, units = "cm")
+
+```
+
+
+###Calculating median expression of MHCII per relevant RCN per molecular profiles
+```{r}
+#For complex heatmaps
+col_fun = colorRamp2(c(0, 0.35), c("white", "#9a0000"))
+
+signal.dat <- cancers.clin %>% filter(!grepl("NACT",therapy_sequence),
+                                       !is.na(therapy_sequence),
+                                       Molecular.profile2 != "Other") %>%
+                                       mutate(MHCII.log2 = log2(MHCII)) %>% 
+                                       select(Molecular.profile2, rcn_id, MHCII.log2)
+
+
+#Calculating median value of MHCII by molecular profiles in PDS
+cancers.mhcii.med <- cancers.clin %>% filter(!grepl("NACT",therapy_sequence),
+                                       !is.na(therapy_sequence),
+                                       Molecular.profile2 != "Other") %>%
+                                       mutate(MHCII.log2 = log2(MHCII)) %>% 
+                                       mutate(MHCII.scaled = 
+                                              (MHCII.log2 - min(MHCII.log2))/(max(MHCII.log2) - min(MHCII.log2))) %>% 
+                                       group_by(rcn_id, Molecular.profile2) %>% 
+                                       summarise(med.MHCII=median(MHCII.scaled))
+
+#Changing data to matrix 
+mt.med.exp <- cancers.mhcii.med %>% pivot_wider(names_from = rcn_id , values_from = med.MHCII)
+mt.med.exp <- as.data.frame(mt.med.exp)
+mt.med.exp[is.na(mt.med.exp)] <- 0
+mt.med.exp <- t(as.matrix(mt.med.exp[,-1]))
+
+
+#Preparing data for creating complex heatmap
+M.profile.order <- c("BRCAloss","HRD","HRP","CCNE1amp")
+colnames(mt.med.exp) <- M.profile.order
+
+#Calculating p.values
+krustal.df <- NULL
+kruskal.pvals <- lapply(unique(cancers.mhcii.med$rcn_id), function(x){
+              df <- signal.dat[which(signal.dat$rcn_id == x),]
+              k.res <- kruskal.test(MHCII.log2 ~ Molecular.profile2, data=df)
+              res <- data.frame(RNCid=x, pval=k.res$p.value, y.val = 0.8)
+              return(res)
+})
+for (i in 1:length(kruskal.pvals)){krustal.df <- rbind(krustal.df, kruskal.pvals[[i]])}
+print(krustal.df)
+
+is_sig = krustal.df$pval < 0.05
+pch = rep("P<0.05", length(is_sig))
+pch[!is_sig] = NA
+  
+ha = rowAnnotation(Significance=pch, col=list(Significance=c("P<0.05"="cyan4")), na_col="grey95",
+                   gp = gpar(col = "white", lwd = 0.5))
+
+
+hmap <- Heatmap(mt.med.exp, cluster_columns = FALSE, cluster_rows = FALSE, row_names_side = "left",
+        name="Median\nexpression\n(Min.max)", rect_gp = gpar(col = "white", lwd = 0.5), col = col_fun,
+        column_title_gp = gpar(fontsize = 16), row_names_gp = gpar(fontsize = 12),
+        column_names_gp = gpar(fontsize = 14),  column_names_rot = 45, right_annotation = ha)
+
+pdf(paste0(out.folder.name, "Heatmap_MHCII_cancer_Mprofiles.pdf"), width=3, height=3)
+draw(hmap)
+dev.off()
+draw(hmap)
+```
