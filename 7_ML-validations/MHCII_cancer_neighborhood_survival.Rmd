@@ -1,0 +1,164 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+```
+
+
+#Reading clinical info
+```{r}
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/Neighborhoods/"
+
+cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.updated.csv", sep=",",
+                            header = TRUE)
+
+clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL", all.x = TRUE)
+
+#Selecting columns of interest
+clin.tcycif <- clin.tcycif %>% select(any_of(c("patient","cycif.slide", "cycif.core.id","refage",
+                                               "figo_stage","growthpattern", "progression",
+                                              "daystoprogression","finalstatus","timelastfu")))
+
+#Loading Molecular profiles
+M.profiles <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
+             sep=",", header = TRUE)
+
+M.profiles.clin <- merge(clin.tcycif, M.profiles, by="patient", all.x=TRUE)
+M.profiles.clin
+
+M.profiles.clin$therapy_sequence2 <- ifelse(grepl("NACT", M.profiles.clin$therapy_sequence),"IDS","PDS")
+M.profiles.clin$therapy_sequence2[is.na(M.profiles.clin$therapy_sequence)] <- "NA"
+
+```
+
+
+
+
+#Reading input information of cell labels
+```{r}
+cells.labels <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype-info_20231129.csv",
+                           sep=",", header = TRUE)
+
+```
+
+
+#Reading cell neighborhood information
+```{r}
+neighbors.counts <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Spatial-cell-counts_radious46px_20231101.csv",
+                               sep=",", header = TRUE)
+```
+
+#Merging cell intensity and neighborhood information
+```{r}
+colnames(neighbors.counts)[1] <- "CellID.long"
+cells.data <- cbind(cells.labels, neighbors.counts)
+
+
+#Selecting only cancer cells
+cancer.cells <- cells.data[cells.data$GlobalCellType == "Cancer",]
+```
+
+
+
+
+#Merging cancer.cell with molecular profile information and stratifiying by MHCII expression
+```{r}
+cancers.dat <- merge(cancer.cells, M.profiles.clin, by=c("cycif.slide", "cycif.core.id"))
+cancers.dat
+```
+
+#Defining function to calculate Fold.changes
+```{r}
+get.fold.changes <- function(input.dat, cells.interest, comparison.name="All.cells"){
+      fold.changes <- sapply(cells.interest, function(x){
+        df <- input.dat[!is.na(input.dat[,x]),]
+        fold.change <- mean(df[df$MHCII.bin=="MHCII.high",x]) /
+                                  mean(df[df$MHCII.bin=="MHCII.low",x])
+        #fold.change <- fold.change -1
+        
+        utest <- wilcox.test(df[df$MHCII.bin=="MHCII.high",x],
+                                  df[df$MHCII.bin=="MHCII.low",x])
+        pval1 <- utest$p.value
+        return(c(fold.change, pval1))
+      })
+      counts <- table(input.dat$MHCII.bin)
+      fold.changes <- as.data.frame(t(fold.changes))
+      fold.changes <- rownames_to_column(fold.changes)
+      colnames(fold.changes) <- c("Neighbors","Fold.chage","Pval")
+      fold.changes$MHCII.high.prop = round(counts[1]/(counts[2] + counts[1]),2)
+      fold.changes$class = comparison.name
+      return(fold.changes)
+}
+
+
+```
+
+
+
+#Calculating fold.change of T.cell neighbors between MHCII.high and MHCII.low
+```{r}
+therapies <- c("PDS","IDS")
+
+neighbors.interest <- c("CD8.T.cells","CD4.T.cells","T.regs","CD11c.MY","CD207.MY",
+                        "CD68.MP","CD163.MP","CD31.stromal", "Stromal")
+
+
+#all.cells  <- get.fold.changes(cancers.dat, neighbors.interest)
+
+fold.neighbors <- NULL
+for (t in therapies){
+    sel.dat <- cancers.dat[cancers.dat$therapy_sequence2 == t,]
+    
+    #Stratifying by MHCII and Ki67
+    sel.dat <- sel.dat %>% mutate(MHCII.bin = ifelse(MHCII > median(MHCII),"MHCII.high","MHCII.low"),
+                                      Ki67.bin = ifelse(Ki67 > median(Ki67),"Ki67.high","Ki67.low"))
+    
+    #Calculating fold change of neighbors
+    neighbors.changes <- lapply(unique(sel.dat$Molecular.profile2), function(x){
+                    subset <- sel.dat[sel.dat$Molecular.profile2 == x,]
+                    get.fold.changes(subset, neighbors.interest, comparison.name=x)
+    })
+    for (j in 1:length(neighbors.changes)){
+      aux <- neighbors.changes[[j]]
+      aux$therapy <- t
+      fold.neighbors <- rbind(fold.neighbors, aux)
+    }
+}
+fold.neighbors$FDR <- p.adjust(fold.neighbors$Pval)
+fold.neighbors$log2FC <- log2(fold.neighbors$Fold.chage)
+
+```
+
+
+
+```{r}
+fold.neighbors$Neighbors <- factor(fold.neighbors$Neighbors, levels=neighbors.interest)
+fold.neighbors$class <- factor(fold.neighbors$class, levels=c("BRCAmut/met","HRD","HRP","CCNE1amp","Other")) 
+
+
+for (t in therapies){
+  df.set <- fold.neighbors %>% filter(therapy=={t},
+                                      FDR < 0.05)
+  
+  
+  p <- ggplot(df.set, aes(x=Neighbors,y=class)) + geom_point(aes(col=log2FC, size=MHCII.high.prop)) + 
+          scale_colour_gradient2(low= "blue", mid="grey90", high ="red", midpoint = 0) +
+          scale_radius(range = c(1,6), limits = c(0.3, 0.8), breaks = c(0.40, 0.50, 0.60, 0.7, 0.8)) +
+          theme(axis.text.x=element_text(size=rel(1), angle = 45, vjust = 1.01, hjust=1),
+                     axis.title.x=element_blank(), axis.title.y=element_blank(),
+                     legend.text=element_text(size=rel(1)),
+                     legend.title=element_text(size=rel(1)),
+                     axis.title=element_text(size=rel(1)),
+                     legend.position = "right") +
+          labs(col='log2(FC)',size='Prop.MHCII+')
+  print(p)
+}
+```
+
