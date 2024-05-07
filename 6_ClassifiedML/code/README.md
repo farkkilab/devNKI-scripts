@@ -25,7 +25,7 @@ To run the code:
 1. Prepare a CSV file with desired experiments
 
   | experiment  | channels | channels_to_transform | channels_to_outliers | channels_to_scale | types_of_cells | classes_column | classes_types | therapies | scaling_type | best_parameters | balanced_acc_train | balanced_acc_test | f1_train | f1_test | most_predictive_features | eliminated_features | permutation_scores | random_seed |
-    | :---:  | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+  | :---:  | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 
 
 1. Don't forget to define the datasets that you will use:
