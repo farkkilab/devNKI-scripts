@@ -11,27 +11,29 @@ library(survminer)
 library(reshape2)
 library(gridExtra)
 library(grid)
+library(ComplexHeatmap)
 ```
 
 
 #Reading input RNA deconvolution files
 ```{r}
-g <- read.table(file="G.tsv")
-z <- read.table(file="Z.tsv", header = TRUE)
-w <- read.table(file="W.tsv", header = TRUE)
+input.folder <- "D:/users/fperez/NKI_TMAs_AF/TCGA_PRISM_RNAdeconvolution/"
+
+g <- read.table(file=paste0(input.folder,"G.tsv"))
+z <- read.table(file=paste0(input.folder,"Z.tsv"), header = TRUE)
+w <- read.table(file=paste0(input.folder,"W.tsv"), header = TRUE)
 ```
 
 #Reading HRD status shared in Perez-Villatoro et al 2022 and clinical data from TCGA
 ```{r}
-clin.dat <- read.csv(file = "TCGA-CDR-SupplementalTableS1_stage-survival.csv", header = TRUE,
-                      row.names = 1)
+clin.dat <- read.csv(file = paste0(input.folder,"TCGA-CDR-SupplementalTableS1_stage-survival.csv"),
+                      header = TRUE, row.names = 1)
 
-out.put.folder <- "/home/fernpere/NKI/Analysis_results/05_MHCII_validations/"
+out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/"
 dir.create(out.put.folder)
 
-HRD.tab <- read.table(
-          file="/home/fernpere/Dropbox/HRD/TCGA_analysis/Categories_Konstantinopoulos_HR_HGSC_germline.csv",
-           sep=",", header=TRUE)
+HRD.tab <- read.table(file=paste0(input.folder,"Categories_Konstantinopoulos_HR_HGSC_germline.csv"),
+                      sep=",", header=TRUE)
 ```
 #Stratifiyin samples acording to tumoral molecular profiles
 ```{r}
@@ -39,8 +41,9 @@ HRD.tab$Molecular.profile <- "HRP"
 HRD.tab$Molecular.profile[HRD.tab$categories == "CCNE1 amplification"] <- "CCNE1amp"
 HRD.tab$Molecular.profile[(HRD.tab$HRDsum >= 54 & !grepl("BRCA", HRD.tab$categories))] <- "HRD"
 HRD.tab$Molecular.profile[grep("BRCA", HRD.tab$categories)] <- "BRCAloss"
-HRD.tab <- HRD.tab[,c("Sample","Molecular.profile")]
+HRD.tab.cat <- HRD.tab[,c("Sample","Molecular.profile")]
 ```
+
 
 
 
@@ -61,7 +64,7 @@ clin.dat$age.bin[clin.dat$age >= 60 & clin.dat$age < 70] = 3
 clin.dat$age.bin[clin.dat$age >= 70 & clin.dat$age < 80] = 4
 clin.dat$age.bin[clin.dat$age >= 80] = 5
 
-#Selecting only high patients with grade tumors 
+#Selecting only high patients with high grade tumors 
 clin.dat <- clin.dat[clin.dat$histological_grade %in% c("G3","G4"),]
 
 #Ignoring low clinical stages
@@ -69,7 +72,7 @@ clin.dat <- clin.dat[!clin.dat$histological_grade %in% c("Stage IA","Stage IB", 
                                                          "Stage IIA","Stage IIB","Stage IIC"),]
 ```
 
-
+#Visualizing RNA deconvoluted expression
 ```{r}
 head(z)
 ```
@@ -121,7 +124,7 @@ hla.eoc.p
 ```{r}
 hla.eoc.clin <- merge(hla.eoc.p, clin.dat, by.x="row.names", by.y="bcr_patient_barcode")
 colnames(hla.eoc.clin)[1] <- "Sample"
-hla.eoc.hr.clin <- merge(hla.eoc.clin, HRD.tab, by="Sample")
+hla.eoc.hr.clin <- merge(hla.eoc.clin, HRD.tab.cat, by="Sample")
 dim(hla.eoc.hr.clin)
 ```
 
@@ -149,7 +152,7 @@ for (gene in genes.to.test){
     p1 <- ggforest(model, data = dat,  main=formulas.labs[i])
     print(p1)
     ggsave(p1, file=paste0(out.put.folder, "Cox_",gene,"_age_",formulas.names[i],".png"),
-           width = 15, height = 11, units = "cm")
+           width = 15, height = 10, units = "cm")
     
     #For kapplan data is stratified by median expression 
     dat$Expression <- ifelse(dat[,gene] > median(dat[,gene]), "High","Low")
@@ -168,9 +171,9 @@ for (gene in genes.to.test){
     p$plot <- p$plot + ggplot2::annotate("text", x = 90, y = 0.85, label =pval, size = 5)
     p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 5, l = 2, unit = "cm"))
     plot.to.save <- list(p$plot, p$table)
-      ggsave(file=paste0(out.put.folder,"Kapplan_",gene,"_",formulas.names[i],".png"),
-             arrangeGrob(grobs = plot.to.save, ncol = 1),
-           width = 13, height = 16, units = "cm")
+    ggsave(file=paste0(out.put.folder,"Kapplan_",gene,"_",formulas.names[i],".png"),
+            arrangeGrob(grobs = plot.to.save, ncol = 1),
+          width = 13, height = 16, units = "cm")
   }
 }
 ```
@@ -202,7 +205,7 @@ for (index in 1:length(classes)){
     p1 <- ggforest(model, data = dat,  main=paste0(formulas.labs[i]," ", profile.names[index]))
     print(p1)
     ggsave(p1, file=paste0(out.put.folder, "Cox_HLA-DPB1_age_",profile.names[index], "_", formulas.names[i],".png"),
-           width = 15, height = 11, units = "cm")
+           width = 15, height = 8, units = "cm")
     
     #For kapplan data is stratified by median expression 
     dat$HLA_DPB1.exp <- ifelse(dat$HLA_DPB1 > median(dat$HLA_DPB1), "HLA-DPB1.High","HLA-DPB1.Low")
@@ -228,7 +231,7 @@ for (index in 1:length(classes)){
 ```
 
 
-#Calculating mean expression of MHCII and MHCI
+#Calculating mean expression of MHCII and MHCI, and survival analysis of it
 ```{r}
 MHCII.genes <- c("HLA-DPA1","HLA-DPA2","HLA-DPA3","HLA-DPB1","HLA-DPB2","HLA-DQA1","HLA-DQA2","HLA-DQB1",
                  "HLA-DQB2","HLA-DQB3","HLA-DRA","HLA-DRB1","HLA-DRB2","HLA-DRB3","HLA-DRB4","HLA-DRB5",
@@ -243,30 +246,357 @@ MHCI.genes <- gsub("-","_", MHCI.genes)
 
 MHCII.mean.expression <- hla.eoc.p %>% mutate(Sample=row.names(.)) %>%
                             select(Sample, any_of(MHCII.genes)) %>% melt() %>% 
-                            group_by(Sample) %>% summarise(MHCII.mean.exp=mean(value))
+                            group_by(Sample) %>% summarise(MHCII.mean.exp=median(value))
 
 MHCI.mean.expression <- hla.eoc.p %>% mutate(Sample=row.names(.)) %>%
                             select(Sample, any_of(MHCI.genes)) %>% melt() %>% 
-                            group_by(Sample) %>% summarise(MHCI.mean.exp=mean(value))
+                            group_by(Sample) %>% summarise(MHCI.mean.exp=median(value))
 
 mhc.mean.exp <- cbind(MHCII.mean.expression, MHCI.mean.expression[,-1])
-```
 
 
-
-
-```{r}
+#Merging with clinical data
 mhc.mean.exp.clin <- merge(mhc.mean.exp, clin.dat, by.x="Sample", by.y="bcr_patient_barcode")
-mhc.mean.exp.clin <- merge(mhc.mean.exp.clin, HRD.tab, by="Sample")
+mhc.mean.exp.clin <- merge(mhc.mean.exp.clin, HRD.tab.cat, by="Sample")
 
+#Stratifiying the mean expression in three groups
 dat <- mhc.mean.exp.clin
 dat$MHCII.exp <- ntile(dat$MHCII.mean.exp,3)
 
+#Doing Cox models
 formulas <- c('Surv(OS.time, OS) ~  MHCII.exp + age.bin + Molecular.profile',
               'Surv(PFI.time, PFI)~ MHCII.exp + age.bin + Molecular.profile')
 
 model <- coxph(as.formula(formulas[1]), data=dat)
 p1 <- ggforest(model, data = dat)
 print(p1)
+```
+
+
+#Plotting expression of MHCII accoding to Molecular profile
+```{r}
+df <- hla.eoc.hr.clin
+df$Molecular.profile <- factor(df$Molecular.profile, levels=c("BRCAloss","HRD","HRP","CCNE1amp"))
+
+df$Molecular.profile2 <- ifelse(df$Molecular.profile == "HRP" | df$Molecular.profile == "CCNE1amp", "HRPs","HRDs")
+
+p <- ggplot(df, aes(x=Molecular.profile, y=HLA_DPB1)) +
+      geom_point(aes(col=Molecular.profile), position= position_jitter(width= .1), alpha = 0.5) +
+      geom_boxplot(outlier.shape=NA, fill=NA, width=0.3) +
+      geom_violin(fill=NA) +
+      labs(title="TCGA cancer-cells deconvoluted expression", subtitle="N=252") +
+      ylab("HLA_DPB1 deconv RNA expression") +
+      theme_bw() + ylim(0,0.00065)
+print(p)
+ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_molecular_profiles.png"), width = 13,
+                      height = 11, units = "cm")
+```
+
+
+###Selecting deconvoluted RNA expression of immune cells
+```{r}
+
+#Selecting the expression columns that comes from Epithelial Ovarian Cancer
+immune.exp <- deconv[,c(1,grep("Immune", colnames(deconv)))]
+immune.genes <- immune.exp$symbol
+immune.exp <- as.data.frame(t(immune.exp[,-1]))
+colnames(immune.exp) <- gsub("-","_", immune.genes)
+
+#Selecting those samples taken in primary setting
+setting <-sapply(row.names(immune.exp), function(x){strsplit(x, "[.]")[[1]][4]})
+immune.exp.p  <- immune.exp[grepl("01", setting),]
+
+#Selecting those samples taken in recurrence setting
+immune.exp.r  <- immune.exp[grep("02", setting),]
+
+
+#Making shorter names from TCGA.04.1348.01A.01R.1565.13..immune to TCGA.04.1348
+names.short.p <- sapply(row.names(immune.exp.p), function(x){
+                  paste(strsplit(x, "[.]")[[1]][1:3], collapse = "-")})
+
+row.names(immune.exp.p) <- names.short.p
+immune.exp.p
+```
+
+
+#Merging RNA expression with clinical data and HRD status
+```{r}
+immune.exp.clin <- merge(immune.exp.p, clin.dat, by.x="row.names", by.y="bcr_patient_barcode")
+colnames(immune.exp.clin)[1] <- "Sample"
+immune.exp.hr.clin <- merge(immune.exp.clin, HRD.tab.cat, by="Sample")
+dim(immune.exp.hr.clin)
+```
+
+
+#Stratiifying samples according to MHCII expression and performing survival analysis
+```{r}
+total.genes.to.test <- c("HLA_DPB1","HLA_A", "CD74", "CXCL9", "CXCL10", "CXCL11",
+                   "IDO1", "ADAMDEC1", "SLAMF7", "CCL5", "CD3D")
+
+hrp.genes.to.test <- c("CRABP1", "CD2", "SLAMF7", "ADAMDEC1", "CD3E", "CD27", "CTLA4", 
+                      "CD3D", "CXCL9", "CXCL10", "CXCL11")
+
+genes.to.test <- unique(hrp.genes.to.test, total.genes.to.test)
+
+out.put.folder2 <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/Immune_deconv/"
+
+
+formulas.names <- c("OS","PFI")
+formulas.labs <- c("OS probability","PFI probability")
+xlim.max.val <- c(150,120)
+dat <- immune.exp.hr.clin
+
+formulas.cox <- c('Surv(OS.time, OS) ~ age.bin + Molecular.profile',
+              'Surv(PFI.time, PFI)~ age.bin + Molecular.profile')
+
+formulas.kapplan <- c('Surv(OS.time, OS) ~  Expression',
+              'Surv(PFI.time, PFI)~ Expression')
+
+for (gene in genes.to.test){
+  for (i in 1:length(formulas.kapplan)){
+    #For cox model data is stratified by tiles 
+    dat$Expression <- ntile(dat[,gene],3)
+    colnames(dat)[colnames(dat) == "Expression"] = paste0(gene,"exp")
+  
+    model <- coxph(as.formula(paste0(formulas.cox[i]," + ", gene,"exp")), data=dat)
+    p1 <- ggforest(model, data = dat,  main=formulas.labs[i])
+    print(p1)
+    ggsave(p1, file=paste0(out.put.folder2, "IMMUNE_Cox_",gene,"_age_",formulas.names[i],".png"),
+           width = 15, height = 10, units = "cm")
+    
+    #For kapplan data is stratified by median expression 
+    dat$Expression <- ifelse(dat[,gene] > median(dat[,gene]), "High","Low")
+    
+    fit <- survfit(as.formula(formulas.kapplan[i]), data = dat)
+    logrank = surv_pvalue(fit, dat)
+    pval=logrank$pval.txt
+    p <- ggsurvplot(fit, data = dat, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                    palette = c("#ff5a36","#4d4dff"),
+                   legend.labs=c(paste0(gene,".High"), paste0(gene,".Low")),
+                   tables.y.text = FALSE, legend.title="",
+                   xlim=c(0,xlim.max.val[i]), break.time.by=30, ylab=formulas.labs[i])
+    p$plot <- p$plot + theme(legend.key.width = unit(3, "line"),
+                             plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"),
+                             legend.key.height = unit(1.5, "line"))
+    p$plot <- p$plot + ggplot2::annotate("text", x = 90, y = 0.85, label =pval, size = 5)
+    p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 5, l = 2, unit = "cm"))
+    plot.to.save <- list(p$plot, p$table)
+    ggsave(file=paste0(out.put.folder2,"IMMUNE_Kapplan_",gene,"_",formulas.names[i],".png"),
+            arrangeGrob(grobs = plot.to.save, ncol = 1),
+          width = 13, height = 16, units = "cm")
+  }
+}
+```
+
+
+
+
+#Survival using immune expression for HRDs or HRPs
+```{r}
+classes <- list(c("BRCAloss","HRD"), 
+                c("CCNE1amp","HRP"))
+
+profile.names <- c("HRDs","HRPs")
+
+formulas.names <- c("OS","PFI")
+formulas.labs <- c("OS probability","PFI probability")
+xlim.max.val <- c(150,120)
+
+formulas.cox <- c('Surv(OS.time, OS) ~ age.bin + Molecular.profile',
+              'Surv(PFI.time, PFI)~ Molecular.profile')
+
+formulas.kapplan <- c('Surv(OS.time, OS) ~  Expression',
+              'Surv(PFI.time, PFI)~ Expression')
+
+dat2 <- immune.exp.hr.clin
+dat2$HLA_DPB1 <- ntile(hla.eoc.hr.clin$HLA_DPB1,3)
+dat2$MHCII.bin <- ntile(hla.eoc.hr.clin$HLA_DPB1,2)
+
+dat2 <- dat2 %>% filter(HLA_DPB1 > 1)
+
+
+for (index in 1:length(classes)){
+  dat <- dat2[dat2$Molecular.profile %in% classes[[index]],]
+  
+  for (gene in genes.to.test){
+  for (i in 1:length(formulas.kapplan)){
+    #For cox model data is stratified by tiles 
+    dat$Expression <- ntile(dat[,gene],3)
+    colnames(dat)[colnames(dat) == "Expression"] = paste0(gene,"exp")
+  
+    model <- coxph(as.formula(paste0(formulas.cox[i]," + ", gene,"exp")), data=dat)
+    p1 <- ggforest(model, data = dat,  main=formulas.labs[i])
+    ggsave(p1, file=paste0(out.put.folder2, "IMMUNE_Cox_",gene,"_age_",profile.names[index],
+                           "_", formulas.names[i],".png"),
+           width = 15, height = 10, units = "cm")
+    
+    #For kapplan data is stratified by median expression 
+    dat$Expression <- ifelse(dat[,gene] > median(dat[,gene]), "High","Low")
+    
+    fit <- survfit(as.formula(formulas.kapplan[i]), data = dat)
+    logrank = surv_pvalue(fit, dat)
+    pval=logrank$pval.txt
+    p <- ggsurvplot(fit, data = dat, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                    #palette = c("#ff5a36","#4d4dff"),
+                   #legend.labs=c(paste0(gene,".High"), paste0(gene,".Low")),
+                   tables.y.text = FALSE, legend.title="",
+                   xlim=c(0,xlim.max.val[i]), break.time.by=30, ylab=formulas.labs[i])
+    p$plot <- p$plot + theme(legend.key.width = unit(3, "line"),
+                             plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"),
+                             legend.key.height = unit(1.5, "line"))
+    p$plot <- p$plot + ggplot2::annotate("text", x = 90, y = 0.85, label =pval, size = 5)
+    p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 5, l = 2, unit = "cm"))
+    p$plot <-  p$plot + guides(colour = guide_legend(nrow = 5))
+    plot.to.save <- list(p$plot, p$table)
+    ggsave(file=paste0(out.put.folder2,"IMMUNE_Kapplan_",gene,"_", profile.names[index], "_", formulas.names[i],".png"),
+            arrangeGrob(grobs = plot.to.save, ncol = 1),
+          width = 13, height = 21, units = "cm")
+  }
+ }
+}
+```
+
+
+
+
+#####Exploring the relationship of MHCII expression in cancer cells and immune gen expression
+```{r}
+#Remove outlier function
+out.rem <- function(x){
+    iqr.x <- IQR(x)
+    quantile3 <- quantile(x, 0.75)
+    cut.val <- quantile3 + 1.5 * iqr.x
+    x[which(x > cut.val)] <- cut.val
+    return(x)
+}
+
+dat2 <- immune.exp.hr.clin
+dat2$HLA.eoc <- ntile(hla.eoc.hr.clin$HLA_DPB1,3)
+
+total.genes.to.test <- c("CD74", "CXCL9", "CXCL10", "CXCL11",
+                   "IDO1", "ADAMDEC1", "SLAMF7", "CCL5", "CD3D")
+
+hrp.genes.to.test <- c("CRABP1", "CD2", "SLAMF7", "ADAMDEC1", "CD3E", "CD27", "CTLA4", 
+                      "CD3D", "CXCL9", "CXCL10", "CXCL11")
+
+genes.to.test <- unique(hrp.genes.to.test, total.genes.to.test)
+
+mat <- dat2 %>% select(any_of(c(genes.to.test))) %>% 
+                mutate_all(., out.rem) %>% scale() %>% t()
+
+ha = HeatmapAnnotation(
+    MHCII.eoc = dat2$HLA.eoc,
+    Profile = factor(immune.exp.hr.clin$Molecular.profile,levels=c("BRCAloss","HRD","HRP","CCNE1amp")),
+    col = list(Profile = c("CCNE1amp" = "blue3", "HRP" = "cyan", "HRD" = "red", BRCAloss="gold")
+    ),
+    gp = gpar(col = "grey")
+)
+
+
+png(paste0(out.put.folder, "Heatmap_HLA-DPB1_Immune_genes_expresssion.png"), res=300, width=8, height=7, units = "in")
+Heatmap(mat, top_annotation = ha, name="Z-score\nexpression")
+dev.off()
+```
+#Boxplots for expression accross molecular profiles
+```{r}
+genes.exp.immune <- as.data.frame(t(mat))
+df <- data.frame(Sample=dat2$Sample,  MHCII.eoc.strat=dat2$HLA.eoc,
+                 Molecular.profile=factor(dat2$Molecular.profile, levels=c("BRCAloss","HRD","HRP","CCNE1amp")))
+df <- cbind(df, genes.exp.immune)
+
+#genes.exp.immune
+colnames(df)[1] <- "Sample"
+df <- df %>% mutate(Class=paste0(Molecular.profile,MHCII.eoc.strat)) %>% 
+             select(-MHCII.eoc.strat) %>% 
+             melt()
+
+colnames(df)[4]<- "Gene"
+colnames(df)[5]<- "Expression"
+
+df$Molecular.profile <- factor(df$Molecular.profile, levels=c("BRCAloss","HRD","HRP","CCNE1amp"))
+
+my_levels <- c("BRCAloss1","BRCAloss2","BRCAloss3","HRD1","HRD2","HRD3","HRP1","HRP2","HRP3",
+              "CCNE1amp1","CCNE1amp2","CCNE1amp3")
+
+df$Class <- factor(df$Class, levels=my_levels)
+
+p <- ggplot(df, aes(x=Class, y=Expression, col=Molecular.profile)) +
+        geom_boxplot() + xlab("") + theme_bw() +
+        theme(axis.text.x = element_text(angle = 75, hjust = 1)) +
+        facet_wrap(~Gene)
+ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_Immune_genes_expresssion_Mprofiles.png"), width = 20,
+                      height = 16, units = "cm")
+```
+
+#Cox model and Kapplan-Mair using sum of all immune gene expressions
+```{r}
+total.genes.to.test <- c("CD74", "CXCL9", "CXCL10", "CXCL11",
+                   "IDO1", "ADAMDEC1", "SLAMF7", "CCL5", "CD3D")
+
+hrp.genes.to.test <- c("CRABP1", "CD2", "SLAMF7", "ADAMDEC1", "CD3E", "CD27", "CTLA4", 
+                      "CD3D", "CXCL9", "CXCL10", "CXCL11")
+
+genes.to.test <- unique(hrp.genes.to.test, total.genes.to.test)
+
+out.put.folder2 <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/Immune_deconv/"
+
+
+formulas.names <- c("OS","PFI")
+formulas.labs <- c("OS probability","PFI probability")
+xlim.max.val <- c(150,120)
+
+dat <- immune.exp.hr.clin
+dat <- dat %>% select(any_of(c("Sample", genes.to.test))) %>%
+                melt() %>%
+                group_by(Sample) %>% 
+                summarise(Total.exp = median(value)) %>% 
+                as.data.frame()
+
+dat.clin <- merge(dat, clin.dat, by.x="Sample", by.y="bcr_patient_barcode")
+colnames(immune.exp.clin)[1] <- "Sample"
+dat.clin.hr.clin <- merge(dat.clin, HRD.tab.cat, by="Sample")
+
+dat <- dat.clin.hr.clin
+dat$HLA.eoc <- ntile(hla.eoc.hr.clin$HLA_DPB1,3)
+
+dat <- dat %>% filter(HLA.eoc > 1)
+
+
+formulas.cox <- c('Surv(OS.time, OS) ~ age.bin + Molecular.profile + Expression',
+              'Surv(PFI.time, PFI)~ age.bin + Molecular.profile + Expression')
+
+formulas.kapplan <- c('Surv(OS.time, OS) ~  Expression',
+              'Surv(PFI.time, PFI)~ Expression')
+
+for (i in 1:length(formulas.kapplan)){
+    #For cox model data is stratified by tiles 
+    dat$Expression <- ntile(dat$Total.exp,3)
+    model <- coxph(as.formula(formulas.cox[i]), data=dat)
+    p1 <- ggforest(model, data = dat,  main=formulas.labs[i])
+    print(p1)
+    ggsave(p1, file=paste0(out.put.folder2, "TOTAL_Cox_age_",formulas.names[i],".png"),
+           width = 15, height = 10, units = "cm")
+    
+    #For kapplan data is stratified by median expression 
+    dat$Expression <- ifelse(dat$Total.exp > median(dat$Total.exp), "High","Low")
+    
+    fit <- survfit(as.formula(formulas.kapplan[i]), data = dat)
+    logrank = surv_pvalue(fit, dat)
+    pval=logrank$pval.txt
+    p <- ggsurvplot(fit, data = dat, risk.table = TRUE, p.val=TRUE, conf.int = TRUE,
+                   palette = c("#ff5a36","#4d4dff"),
+                   legend.labs=c("High", "Low"),
+                   tables.y.text = FALSE, legend.title="",
+                   xlim=c(0,xlim.max.val[i]), break.time.by=30, ylab=formulas.labs[i])
+    p$plot <- p$plot + theme(legend.key.width = unit(3, "line"),
+                             plot.margin = margin(t = 0,  r = 2, b = 0, l = 2, unit = "cm"),
+                             legend.key.height = unit(1.5, "line"))
+    p$plot <- p$plot + ggplot2::annotate("text", x = 90, y = 0.85, label =pval, size = 5)
+    p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 5, l = 2, unit = "cm"))
+    plot.to.save <- list(p$plot, p$table)
+    ggsave(file=paste0(out.put.folder2,"TOTAL_Kapplan_",formulas.names[i],".png"),
+            arrangeGrob(grobs = plot.to.save, ncol = 1),
+          width = 18, height = 16, units = "cm")
+}
 ```
 
