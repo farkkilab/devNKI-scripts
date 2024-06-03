@@ -1,0 +1,298 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(survival)
+library(survminer)
+```
+#Defining input variables
+```{r}
+clinical.data <- read.table(file="L:/ltdk_farkkila/Projects/4_CellCycle/Samples_clinical_data.csv",
+                            sep=",", header = TRUE)
+
+input.annotation.folder <- "P:/h345/afarkkilab/Projects/NKI/Whole_slide_validation/tribus_analysis/output_data/"
+annotation.suffix <- "_annotated.csv"
+
+#Listing all input files
+input.annotation.files <- list.files(input.annotation.folder, pattern = annotation.suffix, full.names =TRUE)
+
+
+#MHCII gating values
+gates.mhcii <- data.frame(sample=c("S057_iOme","S081_iOme","S073_iOme1","S072_iOme","S118_iOme", "S083_iOme1",
+                                   "S098_iOme","S112_iOme","S091_iOme1","S100_iOme","S107_iOme",
+                                   "S110_iTubR","S113_iOme","S121_iOme","S123_iOme","S130_iOme","S131_iOme",
+                                   "S188_iOme", "S197_iOme","S268_iOme","S050_iAdn","S065_iOme"),
+                         gate.val=c(3.0,3.2,3.4,3.2,2.8,3.1,2.9,2.7,
+                                    3.1,3.2,3.1,3.0,3.2,3.3,3.5,3.0,3.2,
+                                    3.2,3.1,3.3,3.0,3.5))
+gates.mhcii$gate.val <- gates.mhcii$gate.val - 0.1
+gates.mhcii
+input.annotation.files
+```
+
+##Reading spatial data
+```{r}
+scimap.output.folder <- "P:/h345/afarkkilab/Projects/NKI/Whole_slide_validation/scimap_analysis/output_data/"
+scimap.file <- "Spatial-cell-proportions_radious30px_new_fuction.csv"
+
+neighboors <- read.table(file=paste0(scimap.output.folder, scimap.file), sep="," , header = TRUE)
+
+```
+
+
+```{r}
+dim(neighboors)
+```
+
+
+#Reading input annotation files
+```{r}
+cells <- NULL
+for (f in input.annotation.files){
+  file.name <- basename(f)
+  sampleid <- paste(strsplit(file.name, "_")[[1]][1:2], collapse = "_")
+  aux <- read.table(file=f, header = TRUE, sep=",")
+  aux <- aux[,-1]
+  aux[,1] <- sampleid
+  colnames(aux)[1] <- "sampleID"
+  if(any(colnames(aux) == "Cancer")){
+    aux <- aux %>% select(-Cancer)
+  }
+  cells <- rbind(cells, aux)
+}
+rm(aux)
+head(cells)
+```
+
+```{r}
+cells %>% group_by(sampleID) %>% 
+          summarise(max(HLA.DPB1))
+
+```
+
+
+#Reading raw data
+```{r}
+# input.annotation.folder <- "P:/h345/afarkkilab/Projects/NKI/Whole_slide_validation/tribus_analysis/input_data/"
+# annotation.suffix <- ".csv"
+# 
+# #Listing all input files
+# input.annotation.files <- list.files(input.annotation.folder, pattern = annotation.suffix, full.names =TRUE)
+# 
+# raw.data <- NULL
+# for (f in input.annotation.files){
+#   file.name <- basename(f)
+#   sampleid <- paste(strsplit(file.name, "_")[[1]][1:2], collapse = "_")
+#   aux <- read.table(file=f, header = TRUE, sep=",")
+#   aux <- aux[,-1]
+#   aux[,1] <- sampleid
+#   colnames(aux)[1] <- "sampleID"
+#   raw.data <- rbind(raw.data, aux)
+# }
+# rm(aux)
+# head(raw.data)
+```
+
+#Cancer cell proportion by patient
+```{r}
+cancer.prop <- cells %>% group_by(Sample, Global) %>% 
+            summarise(n = n()) %>%
+            mutate(proportion = n * 100 / sum(n)) %>% 
+            filter(Global == "Cancer") %>% 
+            separate(Sample, c("Patient", "Tissue"), sep = "_")
+cancer.prop
+```
+
+
+#Merging cell info with neighboor information, selecting cancer cells
+```{r}
+cells.n <- cbind(cells, neighboors)
+
+
+cells.sel <- cells.n %>%
+                  filter(Sample %in% gates.mhcii$sample) %>%
+                  filter(Global=="Cancer") %>% 
+                  select(-Sample)
+                  #mutate(MHCII.bin = ifelse(HLA.DPB1 > 2.5, "MHCII.pos","MHCII.neg"))
+
+cells.sel$Patient <- sapply(cells.sel$sampleID, function(x){strsplit(x,"_")[[1]][1]})
+
+MHCII.stat <- NULL
+for (s in unique(cells.sel$sampleID)){
+  s.sel <- cells.sel %>% filter(sampleID == {s})
+  s.gate <- gates.mhcii[gates.mhcii$sample == s,"gate.val"]
+  aux <- ifelse(s.sel$HLA.DPB1 >= s.gate,"MHCII.pos","MHCII.neg")
+  MHCII.stat <- c(MHCII.stat, aux)
+}
+cells.sel$MHCII.stat <- MHCII.stat
+```
+
+
+####Calculating by patient/sample the propotion of MHCII
+```{r}
+MHCII.prop.pat <- cells.sel %>% group_by(Patient) %>%
+                        summarise(Prop.MHCII.pos=sum(MHCII.stat=="MHCII.pos")/n())
+MHCII.prop.pat <- merge(cancer.prop, MHCII.prop.pat)
+MHCII.prop.pat
+
+ggplot(MHCII.prop.pat, aes(x=proportion, y=Prop.MHCII.pos, col=Tissue)) +
+  geom_point() + xlab("Cancer cell %") + theme_bw() 
+```
+
+#Defining function to calculate Fold.changes in proportion of neighboors
+```{r}
+#The input should have a column for each cell.type neighboor of interest
+get.fold.changes <- function(input.dat, cells.interest, comparison.name="All.cells"){
+      fold.changes <- sapply(cells.interest, function(x){
+        df <- input.dat[!is.na(input.dat[,x]),]
+        fold.change <- mean(df[df$MHCII.stat=="MHCII.pos",x]) /
+                                  mean(df[df$MHCII.stat=="MHCII.neg",x])
+        #fold.change <- fold.change -1
+        
+        utest <- wilcox.test(df[df$MHCII.stat=="MHCII.pos",x],
+                                  df[df$MHCII.stat=="MHCII.neg",x])
+        pval1 <- utest$p.value
+        return(c(fold.change, pval1))
+      })
+      counts <- table(input.dat$MHCII.stat)
+      fold.changes <- as.data.frame(t(fold.changes))
+      fold.changes <- rownames_to_column(fold.changes)
+      colnames(fold.changes) <- c("Neighbors","Fold.chage","Pval")
+      fold.changes$MHCII.high.prop = round(counts[1]/(counts[2] + counts[1]),2)
+      fold.changes$class = comparison.name
+      return(fold.changes)
+}
+```
+
+
+#Calculating if MHCII+ have higher amount of immune 
+```{r}
+neighbors.interest <- c("CD8.T.cell", "CD4.T.cell", "CD11c.Myeloid", "IBA1.Myeloid" ,"Stromal")
+
+fold.neighbors <- get.fold.changes(cells.sel, neighbors.interest, comparison.name="HRP")
+```
+
+
+```{r}
+fold.neighbors$log2FC <- log2(fold.neighbors$Fold.chage)
+fold.neighbors$Fold.chage2 <- fold.neighbors$Fold.chage -1
+fold.neighbors
+```
+
+
+
+```{r}
+out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/Whole_slide_validation/"
+fold.neighbors$Neighbors <- factor(fold.neighbors$Neighbors, levels=neighbors.interest)
+  
+p <- ggplot(fold.neighbors, aes(x=class, y=Neighbors)) + geom_point(aes(col=log2FC), size=5) + 
+        scale_colour_gradient2(low= "blue", mid="grey90", high ="red", midpoint = 0, limits=c(-1,2.3)) +
+        #scale_radius(range = c(1,6), limits = c(0.3, 0.8), breaks = c(0.40, 0.50, 0.60, 0.7, 0.8)) +
+        # scale_radius(range = c(2,6), breaks = c(1, 2, 3, 4),
+        #              labels = c("<0.05", "<1^-3", "<1^-6", "<1^-12")) +
+        theme_classic() +
+        theme(axis.text.x=element_text(size=rel(1.1), angle = 45, vjust = 1.01, hjust=1),
+                   axis.text.y=element_text(size=rel(1.1)),
+                   axis.title.x=element_blank(),
+                   legend.text=element_text(size=rel(1.1)),
+                   legend.title=element_text(size=rel(1.1)),
+                   axis.title=element_text(size=rel(1.1)),
+                   legend.position = "right") +
+        ylab("Cancer cell's neighboors") +
+        labs(col='log2(FC)', size='FDR', title = "MHCII+/MHCII- cancer")
+print(p)
+ggsave(p, file=paste0(out.put.folder,"Fold_changes_MHCII_proximity2.png"), width=8, height=8, units="cm")
+```
+#Assessing clinical information associaton with MHCII+
+```{r}
+#Months of PFS to devide them as long or short PFS
+cut.pfs <- 12 
+
+pat.clin.MHCII <- merge(MHCII.prop.pat, clinical.data, by.x="Patient", by.y="study_id")
+
+#Stratifiying according to MHCII.status
+PFS.status <- ifelse(pat.clin.MHCII$PFS_progression > cut.pfs,"PFS.long","PFS.short")
+
+#In case if not progression after 12months, then name this as PFI.long
+for(i in which(is.na(PFS.status))){
+  if (pat.clin.MHCII[i,"PFS_noProgression"] > cut.pfs){
+    PFS.status[i] <- "PFS.long"
+  }
+}
+pat.clin.MHCII$PFS.status <- PFS.status
+
+#Filtering those with low follow up time and no residual disease
+pat.clin.MHCII <- pat.clin.MHCII[-which(is.na(pat.clin.MHCII$PFS.status)),]
+
+wilcox.test(pat.clin.MHCII[pat.clin.MHCII$PFS.status == "PFS.long","Prop.MHCII.pos"],
+            pat.clin.MHCII[pat.clin.MHCII$PFS.status == "PFS.short","Prop.MHCII.pos"],
+            alternative = "greater")
+
+p <- ggplot(pat.clin.MHCII, aes(x=PFS.status, y=Prop.MHCII.pos)) +
+        geom_point(position= position_jitter(width= .1)) +
+        geom_boxplot(fill=NA, outlier.shape = NA) +
+        theme_bw() + ylab("Proportion of MHCII+ cancer cells")
+print(p)
+ggsave(p, file=paste0(out.put.folder,"Boxplot_MHCII_prop.svg"), width=8, height=10, units="cm")
+```
+#Stratification of patients according to the proportion of MHCII+ cancer cells
+```{r}
+pat.clin.MHCII$PFS <- pat.clin.MHCII$PFS_progression
+no.progressions <- which(is.na(pat.clin.MHCII$PFS))
+pat.clin.MHCII$PFS[no.progressions] <- pat.clin.MHCII$PFS_noProgression[no.progressions]
+
+pat.clin.MHCII$PFS.bin <- ifelse(pat.clin.MHCII$progression_yn=="yes",1,0)
+
+
+pat.clin.MHCII$MHCII.bin <- ifelse(pat.clin.MHCII$Prop.MHCII.pos>0.05, 1,0)
+```
+
+```{r}
+pat.clin.MHCII %>% group_by(MHCII.bin, PFS.status) %>% 
+                  summarise(n=n())
+
+
+pat.clin.MHCII %>% group_by(MHCII.bin, progression_yn) %>% 
+                  summarise(n=n())
+```
+#Visualization of data
+```{r}
+p <- ggplot(pat.clin.MHCII, aes(x=reorder(Patient, Prop.MHCII.pos), y=Prop.MHCII.pos * 100)) +
+        geom_col(aes(fill=PFS.status)) + theme_bw() + xlab("Patient") +
+        ylab("% of MHCII+ cancer cells") +
+        theme(axis.text.x = element_blank()) + scale_fill_manual(values=c("green4","gold")) +
+        geom_hline(yintercept = 22, lty=2)
+print(p)
+ggsave(p, file=paste0(out.put.folder,"Barplots_PFS_MHCIIprop2.svg"), width = 10.5, height = 7, units = "cm")
+
+```
+
+
+```{r}
+my.matrix <- matrix(c(7, 7, 2, 5), nrow = 2)
+fisher.test(my.matrix, alternative="greater")
+```
+
+
+##Kapplan-meir 
+```{r}
+df <- pat.clin.MHCII
+formulas.kapplan <- c('Surv(PFS, PFS.bin) ~ MHCII.bin')
+
+fit <- survfit(as.formula(formulas.kapplan), data = df)
+logrank = surv_pvalue(fit, df)
+pval=logrank$pval.txt
+
+p <- ggsurvplot(fit, data = df, risk.table = TRUE, p.val=TRUE,
+                  conf.int = TRUE, palette = c("#4d4dff", "#ff5a36"),
+                  legend.labs=c("MHCII.low.prop","MHCII.high.prop"), tables.y.text = FALSE, legend.title="")
+print(p)
+
+```
+
+
