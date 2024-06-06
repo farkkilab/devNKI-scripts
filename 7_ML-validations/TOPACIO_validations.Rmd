@@ -1,0 +1,80 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(reshape2)
+```
+
+
+#Reading input clinical and RNA expression data
+```{r}
+clin <- read.table(file="L:/ltdk_farkkila/Data/TOPACIO/clinical.csv", sep=",", header=TRUE)
+exp <- read.table(file="L:/ltdk_farkkila/Data/TOPACIO/genes.csv", sep=",", header=TRUE)
+
+clin.exp <- merge(clin, exp, by="Patient.ID.S")
+```
+
+
+#See correlation of variables
+```{r}
+p <- ggplot(clin.exp, aes(x=HLA.DPB1.mRNA, y=Best.percent.of.tumor.regression.from.baseline, col=HRD.Status)) +
+    geom_point() + theme_bw()
+print(p)
+```
+#Calculating of mean and median expression of genes of interest
+```{r}
+# genes.interest <- c("CD74","CXCL9", "CXCL10","CXCL11", "IDO1", "ADAMDEC1", "SLAMF7" , "CCL5" , "CD3D", "HLA.DPB1")
+# genes.interest <- paste(genes.interest, "mRNA", sep=".")
+
+genes.interest <- c("CXCL9", "IDO1", "HLA.DPB1")
+genes.interest <- paste(genes.interest, "mRNA", sep=".")
+
+mat <- clin.exp %>%
+              select(any_of(genes.interest)) %>% 
+              as.matrix() %>% scale()
+
+na.rows <- which(apply(mat, 1, function(x){any(is.na(x))}))
+
+mat <- mat[-na.rows,]
+
+pca.result <- prcomp(mat, center = TRUE, scale. = TRUE)
+pca.sig <- pca.result$x[,1]
+
+clin.exp2 <- clin.exp[-na.rows,]
+clin.exp2$pca.sig <- pca.sig
+
+df <- clin.exp2 %>% filter(Annotation.of.FFPE.sample.x=="UT")
+
+ggplot(df, aes(x=Response_cat, y=pca.sig)) + geom_point() + theme_bw()
+
+#ggplot(df, aes(x=Best.percent.of.tumor.regression.from.baseline, y=Genes.mean)) + geom_point() + theme_bw()
+```
+
+```{r}
+genes.interest <- c("CXCL9", "IDO1", "HLA.DPB1")
+genes.interest <- paste(genes.interest, "mRNA", sep=".")
+
+#genes.interest <- c("CD74","CXCL9", "CXCL10","CXCL11", "IDO1", "ADAMDEC1", "SLAMF7" , "CCL5" , "CD3D", "HLA.DPB1")
+#genes.interest <- paste(genes.interest, "mRNA", sep=".")
+
+
+clin.exp2 <- clin.exp %>%
+              rowwise() %>%
+              mutate(Genes.med=median(c_across(any_of(genes.interest))),
+                     Genes.mean=mean(c_across(any_of(genes.interest)))) %>%
+              ungroup()
+
+
+df <- clin.exp2 %>% filter(Annotation.of.FFPE.sample.x=="UT")
+
+ggplot(df, aes(x=Response_cat, y=Genes.med)) + geom_point() + theme_bw()
+
+ggplot(df, aes(x=Best.percent.of.tumor.regression.from.baseline, y=Genes.mean)) + geom_point() + theme_bw()
+
+```
+
