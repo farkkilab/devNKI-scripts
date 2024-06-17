@@ -10,3 +10,5 @@ RCN_analysis.Rmd  - Script previously used to explore several outputs from scima
 RCN_inspection.Rmd  - Current scripts to inspect final RNC using radious of 46px and creating 30 RCNs. In this script are merged the RCN labels,  stored the labels in Napari format and calculated the proportion of RCN by core
 
 Spatial_counts.ipynb - Python script using modified scimap function to count the number of neighbor cells from each population 
+
+WSI_Spatial_counts.ipynb: Python script using modified scimap function to count the number of neighbor cells from each population on whole slide images. 
