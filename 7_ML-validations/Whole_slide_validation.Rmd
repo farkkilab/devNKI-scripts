@@ -27,12 +27,11 @@ gates.mhcii <- data.frame(sample=c("S057_iOme","S081_iOme","S073_iOme1","S072_iO
                                    "S098_iOme","S112_iOme","S091_iOme1","S100_iOme","S107_iOme",
                                    "S110_iTubR","S113_iOme","S121_iOme","S123_iOme","S130_iOme","S131_iOme",
                                    "S188_iOme", "S197_iOme","S268_iOme","S050_iAdn","S065_iOme"),
-                         gate.val=c(3.0,3.2,3.4,3.2,2.8,3.1,2.9,2.7,
-                                    3.1,3.2,3.1,3.0,3.2,3.3,3.5,3.0,3.2,
-                                    3.2,3.1,3.3,3.0,3.5))
-gates.mhcii$gate.val <- gates.mhcii$gate.val - 0.1
-gates.mhcii
+                         gate.val=c(3.0,3.2,3.4,3.2,2.8,3.2,2.6,2.7,
+                                    2.8,3.1,2.9,2.9,3.0,3.0,3.3,2.9,
+                                    3.1,3.15,3.1,3.1,2.9,3.5))
 input.annotation.files
+gates.mhcii2 <- gates.mhcii
 ```
 
 ##Reading spatial data
@@ -118,27 +117,132 @@ cells.sel <- cells.n %>%
                   filter(Sample %in% gates.mhcii$sample) %>%
                   filter(Global=="Cancer") %>% 
                   select(-Sample)
-                  #mutate(MHCII.bin = ifelse(HLA.DPB1 > 2.5, "MHCII.pos","MHCII.neg"))
 
 cells.sel$Patient <- sapply(cells.sel$sampleID, function(x){strsplit(x,"_")[[1]][1]})
+```
 
-MHCII.stat <- NULL
-for (s in unique(cells.sel$sampleID)){
-  s.sel <- cells.sel %>% filter(sampleID == {s})
-  s.gate <- gates.mhcii[gates.mhcii$sample == s,"gate.val"]
-  aux <- ifelse(s.sel$HLA.DPB1 >= s.gate,"MHCII.pos","MHCII.neg")
-  MHCII.stat <- c(MHCII.stat, aux)
+
+
+
+```{r}
+reduced.gate.vals <- c(0, 0.01,0.02,0.03,0.04,0.05)
+cut.pfs.vals <- c(8:16)
+#reduced.gate.vals <- 0.04
+#cut.pfs.vals <- 11
+gates.mhcii <- gates.mhcii2
+stop_all <- FALSE
+
+formulas.kapplan <- c('Surv(PFS, PFS.bin) ~ MHCII.bin2')
+
+
+suppressWarnings(
+  for (r in reduced.gate.vals){
+    if (stop_all){break}
+    gates.mhcii$gate.val <- gates.mhcii$gate.val - r
+    MHCII.stat <- NULL
+    for (s in unique(cells.sel$sampleID)){
+      s.sel <- cells.sel %>% filter(sampleID == {s})
+      s.gate <- gates.mhcii[gates.mhcii$sample == s,"gate.val"]
+      aux <- ifelse(s.sel$HLA.DPB1 >= s.gate,"MHCII.pos","MHCII.neg")
+      MHCII.stat <- c(MHCII.stat, aux)
+    }
+    cells.sel$MHCII.stat <- MHCII.stat
+    
+    MHCII.prop.pat <- cells.sel %>% group_by(Patient) %>%
+                        summarise(Prop.MHCII.pos=sum(MHCII.stat=="MHCII.pos") * 100/n())
+    MHCII.prop.pat <- merge(cancer.prop, MHCII.prop.pat)
+    pat.clin.MHCII <- merge(MHCII.prop.pat, clinical.data, by.x="Patient", by.y="study_id")
+    #pat.clin.MHCII <- pat.clin.MHCII[which(pat.clin.MHCII$surgery_type == "IDS"),]
+    #pat.clin.MHCII <- pat.clin.MHCII[which(pat.clin.MHCII$therapy_type == "adjuvant"),]
+    
+    mhcii.cuts <- quantile(pat.clin.MHCII$Prop.MHCII.pos, seq(0.5,0.85, by=0.01))
+
+    for (cut.pfs in cut.pfs.vals){
+      if (stop_all){break}
+      #Stratifying according to PFS time into short and long PFS
+      PFS.status <- ifelse(pat.clin.MHCII$PFS_progression > cut.pfs,"PFS.long","PFS.short")
+      
+      #In case if not progression after the PFS.cut and follow up time is longer, then name this as PFI.long
+      for(i in which(is.na(PFS.status))){
+        if (pat.clin.MHCII[i,"PFS_noProgression"] > cut.pfs){
+          PFS.status[i] <- "PFS.long"
+        }
+      }
+      pat.clin.MHCII$PFS.status <- PFS.status
+      
+      #Filtering those with low follow up time
+      pat.clin.MHCII <- pat.clin.MHCII[which(!is.na(pat.clin.MHCII$PFS.status)),]
+      
+      u.test1 <- wilcox.test(pat.clin.MHCII[pat.clin.MHCII$PFS.status == "PFS.long","Prop.MHCII.pos"],
+                  pat.clin.MHCII[pat.clin.MHCII$PFS.status == "PFS.short","Prop.MHCII.pos"],
+                  alternative = "greater")
+      if (u.test1$p.value < 0.05){
+        print(paste0("Value r: ", r, " PFS.cut: ", cut.pfs, " U.test p-val: ", round(u.test$p.value, 3)))
+      }
+      
+      
+      for (cut.mhcii in mhcii.cuts){
+          numbers.pfs.mhciipos  <- pat.clin.MHCII %>%
+                        mutate(MHCII.bin = ifelse(Prop.MHCII.pos >= cut.mhcii, "MHCII.high","MHCII.low"))
+          
+          #Stratification to perform fisher exact test  
+          val1 <- sum(numbers.pfs.mhciipos$MHCII.bin == "MHCII.high" &  numbers.pfs.mhciipos$PFS.status == "PFS.long")
+          val2 <- sum(numbers.pfs.mhciipos$MHCII.bin == "MHCII.high" &  numbers.pfs.mhciipos$PFS.status == "PFS.short")
+          val3 <- sum(numbers.pfs.mhciipos$MHCII.bin == "MHCII.low" &  numbers.pfs.mhciipos$PFS.status == "PFS.long")
+          val4 <- sum(numbers.pfs.mhciipos$MHCII.bin == "MHCII.low" &  numbers.pfs.mhciipos$PFS.status == "PFS.short")
+          my.matrix <- matrix(c(val1, val2, val3, val4), nrow = 2)
+          ftest <- fisher.test(my.matrix, alternative="greater")
+          
+          if (ftest$p.value < 0.2){
+              print(paste0("Value r: ", r, " PFS.cut: ", cut.pfs, " U.test p-val: ", round(u.test$p.value, 3)))
+              print(paste0("MHCII cut: ", cut.mhcii, " Fisher test pval: ", round(ftest$p.value, 3)))
+              print(my.matrix)
+          }
+          
+          
+          #Preparing data for Log-rank test
+          numbers.pfs.mhciipos$PFS <- numbers.pfs.mhciipos$PFS_progression
+          if(any(is.na(numbers.pfs.mhciipos$PFS))){
+            numbers.pfs.mhciipos$PFS[which(is.na(numbers.pfs.mhciipos$PFS))] <- numbers.pfs.mhciipos$PFS_noProgression[which(is.na(numbers.pfs.mhciipos$PFS))]
+          }
+          numbers.pfs.mhciipos$PFS.bin <- ifelse(numbers.pfs.mhciipos$PFS.status == "PFS.long",1,0)
+          numbers.pfs.mhciipos$MHCII.bin2 <- ifelse(numbers.pfs.mhciipos$MHCII.bin == "MHCII.high",1,0)
+          
+          #Log-rank test
+          fit <- survfit(as.formula(formulas.kapplan), data = numbers.pfs.mhciipos)
+          logrank = surv_pvalue(fit)
+          pval=logrank$pval.txt
+          if (pval < 0.2){
+                print(paste0("Value r: ", r, " PFS.cut: ", cut.pfs, " U.test p-val: ", round(u.test$p.value, 3)))
+                print(paste0("MHCII cut: ", cut.mhcii, " Log rank pval: ", pval))
+                print(my.matrix)
+          }
+      }
+      
+      #U test using PFS time difference between MHCII.high and MHCII.low patients
+      u.test2 <- wilcox.test(numbers.pfs.mhciipos[numbers.pfs.mhciipos$MHCII.bin == "MHCII.high","PFS"],
+                  numbers.pfs.mhciipos[numbers.pfs.mhciipos$MHCII.bin == "MHCII.low","PFS"],
+                  alternative = "greater")
+      if (u.test2$p.value < 0.05){
+              print(paste0("Value r: ", r, " PFS.cut: ", cut.pfs, " U.test p-val: ", round(u.test$p.value, 3)))
+              print(paste0("MHCII cut: ", cut.mhcii, " Log rank pval: ", pval))
+      }
+          
+
+      # p <- ggplot(pat.clin.MHCII, aes(x=PFS.status, y=Prop.MHCII.pos))  +
+      #         geom_point(position= position_jitter(width= .1)) +
+      #         geom_boxplot(fill=NA, outlier.shape = NA) +
+      #         theme_bw() + ylab("Proportion of MHCII+ cancer cells")
+      # print(p)
+    }
 }
-cells.sel$MHCII.stat <- MHCII.stat
+)
 ```
 
 
 ####Calculating by patient/sample the propotion of MHCII
 ```{r}
-MHCII.prop.pat <- cells.sel %>% group_by(Patient) %>%
-                        summarise(Prop.MHCII.pos=sum(MHCII.stat=="MHCII.pos")/n())
-MHCII.prop.pat <- merge(cancer.prop, MHCII.prop.pat)
-MHCII.prop.pat
+
 
 ggplot(MHCII.prop.pat, aes(x=proportion, y=Prop.MHCII.pos, col=Tissue)) +
   geom_point() + xlab("Cancer cell %") + theme_bw() 
@@ -191,7 +295,7 @@ out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validation
 fold.neighbors$Neighbors <- factor(fold.neighbors$Neighbors, levels=neighbors.interest)
   
 p <- ggplot(fold.neighbors, aes(x=class, y=Neighbors)) + geom_point(aes(col=log2FC), size=5) + 
-        scale_colour_gradient2(low= "blue", mid="grey90", high ="red", midpoint = 0, limits=c(-1,2.3)) +
+        scale_colour_gradient2(low= "blue", mid="grey90", high ="red", midpoint = 0, limits=c(-1,2)) +
         #scale_radius(range = c(1,6), limits = c(0.3, 0.8), breaks = c(0.40, 0.50, 0.60, 0.7, 0.8)) +
         # scale_radius(range = c(2,6), breaks = c(1, 2, 3, 4),
         #              labels = c("<0.05", "<1^-3", "<1^-6", "<1^-12")) +
@@ -210,35 +314,7 @@ ggsave(p, file=paste0(out.put.folder,"Fold_changes_MHCII_proximity2.png"), width
 ```
 #Assessing clinical information associaton with MHCII+
 ```{r}
-#Months of PFS to devide them as long or short PFS
-cut.pfs <- 12 
 
-pat.clin.MHCII <- merge(MHCII.prop.pat, clinical.data, by.x="Patient", by.y="study_id")
-
-#Stratifiying according to MHCII.status
-PFS.status <- ifelse(pat.clin.MHCII$PFS_progression > cut.pfs,"PFS.long","PFS.short")
-
-#In case if not progression after 12months, then name this as PFI.long
-for(i in which(is.na(PFS.status))){
-  if (pat.clin.MHCII[i,"PFS_noProgression"] > cut.pfs){
-    PFS.status[i] <- "PFS.long"
-  }
-}
-pat.clin.MHCII$PFS.status <- PFS.status
-
-#Filtering those with low follow up time and no residual disease
-pat.clin.MHCII <- pat.clin.MHCII[-which(is.na(pat.clin.MHCII$PFS.status)),]
-
-wilcox.test(pat.clin.MHCII[pat.clin.MHCII$PFS.status == "PFS.long","Prop.MHCII.pos"],
-            pat.clin.MHCII[pat.clin.MHCII$PFS.status == "PFS.short","Prop.MHCII.pos"],
-            alternative = "greater")
-
-p <- ggplot(pat.clin.MHCII, aes(x=PFS.status, y=Prop.MHCII.pos)) +
-        geom_point(position= position_jitter(width= .1)) +
-        geom_boxplot(fill=NA, outlier.shape = NA) +
-        theme_bw() + ylab("Proportion of MHCII+ cancer cells")
-print(p)
-ggsave(p, file=paste0(out.put.folder,"Boxplot_MHCII_prop.svg"), width=8, height=10, units="cm")
 ```
 #Stratification of patients according to the proportion of MHCII+ cancer cells
 ```{r}
@@ -249,7 +325,7 @@ pat.clin.MHCII$PFS[no.progressions] <- pat.clin.MHCII$PFS_noProgression[no.progr
 pat.clin.MHCII$PFS.bin <- ifelse(pat.clin.MHCII$progression_yn=="yes",1,0)
 
 
-pat.clin.MHCII$MHCII.bin <- ifelse(pat.clin.MHCII$Prop.MHCII.pos>0.05, 1,0)
+pat.clin.MHCII$MHCII.bin <- ifelse(pat.clin.MHCII$Prop.MHCII.pos>13.5, 1,0)
 ```
 
 ```{r}
@@ -262,14 +338,13 @@ pat.clin.MHCII %>% group_by(MHCII.bin, progression_yn) %>%
 ```
 #Visualization of data
 ```{r}
-p <- ggplot(pat.clin.MHCII, aes(x=reorder(Patient, Prop.MHCII.pos), y=Prop.MHCII.pos * 100)) +
+p <- ggplot(pat.clin.MHCII, aes(x=reorder(Patient, Prop.MHCII.pos), y=Prop.MHCII.pos)) +
         geom_col(aes(fill=PFS.status)) + theme_bw() + xlab("Patient") +
         ylab("% of MHCII+ cancer cells") +
         theme(axis.text.x = element_blank()) + scale_fill_manual(values=c("green4","gold")) +
-        geom_hline(yintercept = 22, lty=2)
+        geom_hline(yintercept = 13, lty=2)
 print(p)
 ggsave(p, file=paste0(out.put.folder,"Barplots_PFS_MHCIIprop2.svg"), width = 10.5, height = 7, units = "cm")
-
 ```
 
 
@@ -289,10 +364,23 @@ logrank = surv_pvalue(fit, df)
 pval=logrank$pval.txt
 
 p <- ggsurvplot(fit, data = df, risk.table = TRUE, p.val=TRUE,
-                  conf.int = TRUE, palette = c("#4d4dff", "#ff5a36"),
+                  conf.int = TRUE, palette = c("#4d4dff", "green3"),
                   legend.labs=c("MHCII.low.prop","MHCII.high.prop"), tables.y.text = FALSE, legend.title="")
 print(p)
 
 ```
 
+```{r}
+p <- ggplot(pat.clin.MHCII, aes(x=Prop.MHCII.pos, y=PFS, col=proportion)) +
+        geom_point(position= position_jitter(width= .1)) +
+        theme_bw() + labs(colour="Cancer.prop")
+print(p)
+```
 
+```{r}
+p <- ggplot(pat.clin.MHCII, aes(x=factor(MHCII.bin), y=PFS, col=residual)) +
+        geom_point(position= position_jitter(width= .1))  +
+        #boxplot(fill=NA, outlier.shape = NA) +
+        theme_bw() + labs(colour="Cancer.prop")
+print(p)
+```

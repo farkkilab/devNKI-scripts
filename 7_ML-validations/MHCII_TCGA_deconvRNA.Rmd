@@ -334,7 +334,7 @@ total.genes.to.test <- c("HLA_DPB1","HLA_A", "CD74", "CXCL9", "CXCL10", "CXCL11"
                    "IDO1", "ADAMDEC1", "SLAMF7", "CCL5", "CD3D")
 
 hrp.genes.to.test <- c("CRABP1", "CD2", "SLAMF7", "ADAMDEC1", "CD3E", "CD27", "CTLA4", 
-                      "CD3D", "CXCL9", "CXCL10", "CXCL11")
+                      "CD3D", "CXCL9", "CXCL10", "CXCL11", "IDO1")
 
 genes.to.test <- unique(hrp.genes.to.test, total.genes.to.test)
 
