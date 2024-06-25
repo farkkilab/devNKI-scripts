@@ -1,5 +1,5 @@
-# OLD VERSIONL: RF-based pipeline for binary classification 
-For new version see CEFIIRA
+# OLD VERSION: RF-based pipeline for binary classification 
+### For new version see CEFIIRA
 
 Files:
 
