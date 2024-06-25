@@ -1,5 +1,5 @@
 # OLD VERSION: RF-based pipeline for binary classification 
-### For new version see CEFIIRA
+### For new version see CEFIIRA: https://github.com/farkkilab/CEFIIRA
 
 Files:
 
