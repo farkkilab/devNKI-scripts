@@ -1,0 +1,168 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggrepel)
+library(pheatmap)
+library(RColorBrewer)
+```
+
+
+###Reading input 
+```{r}
+nanostring <- read.table(file="P:/h345/afarkkilab/Projects/NKI/RNA_seq_analysis_Ada/data/RNA_Nanostring_MHCIIcat_NKI.csv",
+           sep=",", header=TRUE)
+```
+
+
+#Analizing genes
+```{r}
+gene.cols <- 24:358
+gene.names <- colnames(nanostring)[gene.cols]
+
+MHCII.cat1 <- nanostring %>% filter(MHCII.cat == 1) %>% 
+                select(any_of(gene.names)) %>% 
+                drop_na() %>% 
+                as.matrix() 
+
+means.MHCII.cat1 <- apply(MHCII.cat1, 2, mean)
+        
+MHCII.cat3 <- nanostring %>% filter(MHCII.cat == 3) %>% 
+                select(any_of(gene.names)) %>% 
+                drop_na() %>% 
+                as.matrix()
+
+means.MHCII.cat3 <- apply(MHCII.cat3, 2, mean)
+
+log2fold.change <- means.MHCII.cat3 - means.MHCII.cat1
+
+pvals <- sapply(gene.names, function(x){
+          t.res <- t.test(MHCII.cat3[,x], MHCII.cat1[,x])
+          t.res$p.value
+})
+p.adjusted <- p.adjust(pvals, method="BH")
+
+results <- data.frame(gene=gene.names, p.value = pvals,
+                      padj = p.adjusted, log2Fold.change=log2fold.change)
+results
+```
+
+#Plotting results
+```{r}
+#Thresholds for significant genes
+padj_threshold <- 0.001
+log2fc_threshold <- 1
+
+
+p<- ggplot(results, aes(x = log2Fold.change, y = -log10(padj))) +
+        geom_point(aes(color = padj < padj_threshold & abs(log2Fold.change) >= log2fc_threshold), alpha = 0.5) +
+        scale_color_manual(values = c("gray", "red")) +
+        geom_text_repel(
+          data = results %>% filter((padj < padj_threshold & abs(log2Fold.change) >= log2fc_threshold)),
+          aes(label = gene),
+          size = 3,
+          box.padding = unit(0.35, "lines"),
+          point.padding = unit(0.3, "lines"),
+          max.overlaps=100) +
+        theme_classic() +
+        geom_vline(xintercept = log2fc_threshold, lty=2, col="grey") +  
+        geom_vline(xintercept = -log2fc_threshold, lty=2, col="grey") +  
+        geom_hline(yintercept = -log10(padj_threshold), lty=2, col="grey") +
+        labs(x = "Log2 Fold Change", y = "-log10 Adjusted P-value", color = "Significant") +
+        theme(legend.position = "none") + xlim(-3,3)
+
+print(p)
+ggsave(p, 
+       filename="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/NanoString/Volcano_plot.png",
+       width = 12, height = 12, units = "cm")
+```
+
+#Plotting heatmap with significant genes
+```{r}
+significant_genes = results %>% filter(padj < padj_threshold,
+                                       abs(log2Fold.change) >= log2fc_threshold) %>% 
+                                pull(gene)
+
+breaksList <- seq(min(-1), max(1.1), by = 0.01)
+
+
+#Preparing data for input of pheatmap
+df <- nanostring %>% filter(Therapy.sequence == "PDS", 
+                            MHCII.cat != 2) %>%
+                      select(any_of(c("patient", "MHCII.cat",
+                                      "Molecular.profile", "MHCII.prop", significant_genes))) %>% 
+                      drop_na()
+df$MHCII.cat <- factor(df$MHCII.cat, levels = c(3.0, 2.0, 1.0), labels = c("High", "Med", "Low"))
+rownames(df) <- df$patient
+transposed_df <- t(df[, significant_genes])
+  
+annotations <- df[, c("MHCII.cat", "Molecular.profile", "MHCII.prop")]
+annotation_colors <- list(#Therapy.sequence = c(IDS = "#FFAE03", PDS = "#009B72"),
+                          #merged.Molecular.profile = c("HRD+BRCAloss"="#FF76CE", "HRP+CCNE1amp"="#94FFD8"),
+                          Molecular.profile = c(BRCAloss = "#FF76CE",
+                                                HRD = "#FDFFC2",
+                                                HRP = "#94FFD8",
+                                                CCNE1amp = "#A3D8FF",
+                                                Other="grey"),
+                          MHCII.cat = c(Low = "#E6B9DE", High = "#11009E"))
+
+
+png(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/NanoString/Heatmap_DEgenes.png",
+    width = 18, height = 18, units = "cm", res=120)  
+pheatmap(
+    transposed_df,
+    annotation_col = annotations,
+    annotation_colors = annotation_colors,
+    cluster_rows = TRUE,
+    cluster_cols = TRUE,
+    clustering_method = "complete",
+    clustering_distance_cols = "euclidean",
+    scale = "row",
+    show_colnames = FALSE,
+    #main = NULL,
+    color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(breaksList)),
+    breaks = breaksList
+  )
+dev.off()
+```
+
+#Comparison of differentially expressed genes
+```{r}
+tcga.DE.genes <- read.table(file="C:/Users/fernpere/Downloads/RNAseq_TCGA/Overexpressed_genes.csv",
+                          sep=",", header=TRUE)
+
+intersected <- intersect(significant_genes, tcga.DE.genes$gene)
+absent.nanostring <- significant_genes[!significant_genes %in% intersected]
+print(paste0("Genes not DE in TCGA but DE in Nanostring NKI: "))
+print(absent.nanostring)
+absent.tcga <- tcga.DE.genes$gene[!tcga.DE.genes$gene %in% significant_genes]
+absent.tcga <- intersect(absent.tcga, gene.names) #Selecting only those in the nanostring panel
+absent.from.TCGA <- results %>% filter(gene %in% absent.tcga) %>% pull(gene)
+print(paste0("Genes not DE in Nanostring but DE in TCGA: "))
+print(absent.from.TCGA)
+
+```
+
+```{r}
+tcga.DE.genes <- read.table(file="C:/Users/fernpere/Downloads/RNAseq_TCGA/Overexpressed_genes.csv",
+                          sep=",", header=TRUE)
+
+tcga.DE.genes.eoc <- read.table(file="C:/Users/fernpere/Downloads/RNAseq_TCGA/Overexpressed_genes_EOCDeconvolution.csv",
+                          sep=",", header=TRUE)
+
+tcga.DE.genes.immune <- read.table(file="C:/Users/fernpere/Downloads/RNAseq_TCGA/Overexpressed_genes_ImmuneDeconvolution.csv", sep=",", header=TRUE)
+
+
+intersect1 <- intersect(tcga.DE.genes$gene, tcga.DE.genes.immune$gene)
+
+intersect2 <- intersect(intersect1, tcga.DE.genes.immune$gene)
+
+sort(unique(intersect1))
+
+```
+

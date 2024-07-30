@@ -12,6 +12,7 @@ library(reshape2)
 library(gridExtra)
 library(grid)
 library(ComplexHeatmap)
+library(sigQC)
 ```
 
 
@@ -19,10 +20,11 @@ library(ComplexHeatmap)
 ```{r}
 input.folder <- "D:/users/fperez/NKI_TMAs_AF/TCGA_PRISM_RNAdeconvolution/"
 
-g <- read.table(file=paste0(input.folder,"G.tsv"))
+g <- read.table(file=paste0(input.folder,"G.tsv"),  header = TRUE)
 z <- read.table(file=paste0(input.folder,"Z.tsv"), header = TRUE)
 w <- read.table(file=paste0(input.folder,"W.tsv"), header = TRUE)
 ```
+
 
 #Reading HRD status shared in Perez-Villatoro et al 2022 and clinical data from TCGA
 ```{r}
@@ -34,21 +36,16 @@ dir.create(out.put.folder)
 
 HRD.tab <- read.table(file=paste0(input.folder,"Categories_Konstantinopoulos_HR_HGSC_germline.csv"),
                       sep=",", header=TRUE)
-```
-#Stratifiyin samples acording to tumoral molecular profiles
-```{r}
+
+
+#Stratify samples according to tumoral molecular profiles
 HRD.tab$Molecular.profile <- "HRP"
 HRD.tab$Molecular.profile[HRD.tab$categories == "CCNE1 amplification"] <- "CCNE1amp"
-HRD.tab$Molecular.profile[(HRD.tab$HRDsum >= 54 & !grepl("BRCA", HRD.tab$categories))] <- "HRD"
+HRD.tab$Molecular.profile[HRD.tab$HRDsum >= 54] <- "HRD"
 HRD.tab$Molecular.profile[grep("BRCA", HRD.tab$categories)] <- "BRCAloss"
 HRD.tab.cat <- HRD.tab[,c("Sample","Molecular.profile")]
-```
 
-
-
-
-#Structuring clinical data
-```{r}
+# Structuring clinical data
 clin.dat <- clin.dat[clin.dat$type == "OV",]
 clin.dat$PFI.time <- as.numeric(clin.dat$PFI.time)/30.4
 clin.dat$OS.time <- as.numeric(clin.dat$OS.time)/30.4
@@ -68,28 +65,29 @@ clin.dat$age.bin[clin.dat$age >= 80] = 5
 clin.dat <- clin.dat[clin.dat$histological_grade %in% c("G3","G4"),]
 
 #Ignoring low clinical stages
-clin.dat <- clin.dat[!clin.dat$histological_grade %in% c("Stage IA","Stage IB", "Stage IC",
+clin.dat <- clin.dat[!clin.dat$clinical_stage %in% c("[Not Available]", "Stage IA","Stage IB", "Stage IC",
                                                          "Stage IIA","Stage IIB","Stage IIC"),]
-```
-
-#Visualizing RNA deconvoluted expression
-```{r}
-head(z)
+clin.dat
 ```
 
 
 #Normalizing data according to PRISM developers
 ```{r}
 w.dat <- as.matrix(w[,-1])
+rownames(w.dat) <- gsub("-","\\.", w[,1])
 z.dat <- as.matrix(z[,-c(1,2)])
 
-deconv <- t( t(z.dat) / c(t(g * w.dat )))
+deconv <- t( t(z.dat) / c(t(c(as.matrix(g)) * w.dat )))
 deconv <- as.data.frame(deconv)
 
 deconv$symbol <- z$symbol
 
 deconv <- deconv %>% select(symbol, everything())
+
+deconv[1:5,1:5]
 ```
+
+
 
 
 #Selecting HLA genes and organizing data table
@@ -120,6 +118,31 @@ hla.eoc.p
 ```
 
 
+#Getting SF for differential expressed analysis
+```{r}
+z.immune = z.dat[,c(grep("Immune", colnames(z.dat)))]
+
+#Only selecting those in primary setting
+setting <- sapply(colnames(z.immune), function(x){strsplit(x, "[.]")[[1]][4]})
+z.immune.p  <- z.immune[,grepl("01", setting)]
+samples.sel  <- gsub("\\..Immune.", "", colnames(z.immune.p))
+
+#Making shorter names from TCGA.04.1348.01A.01R.1565.13..EOC to TCGA.04.1348
+names.shorter <- sapply(samples.sel, function(x){
+                  paste(strsplit(x, "[.]")[[1]][1:3], collapse = "-")})
+
+colnames(z.immune.p) <- names.shorter
+row.names(z.immune.p) <- z[,1]
+
+#Calculating size factors for DESEq according to PRISM developers
+sf = t( c(as.matrix(g)) * w.dat)
+sf <- as.matrix(sf["Immune", samples.sel])
+row.names(sf) <- names.shorter
+colnames(sf) <- "SF"
+```
+
+
+
 #Merging RNA expression with clinical data and HRD status
 ```{r}
 hla.eoc.clin <- merge(hla.eoc.p, clin.dat, by.x="row.names", by.y="bcr_patient_barcode")
@@ -128,12 +151,74 @@ hla.eoc.hr.clin <- merge(hla.eoc.clin, HRD.tab.cat, by="Sample")
 dim(hla.eoc.hr.clin)
 ```
 
-#Stratiifying samples according to MHCII expression and performing survival analysis
+##Saving table with clinical information and epithelial expression of MHCII
+```{r}
+write.table(hla.eoc.hr.clin,
+            file="D:/users/fperez/NKI_TMAs_AF/TCGA_PRISM_RNAdeconvolution/EOC_component_clinics.tsv",
+            sep="\t", row.names=FALSE)
+```
+
+
+
+#Preparing dataset to calculate MHCII gene signature in EOC component
+```{r}
+mRNA_expr_matrix = list()
+aux <- hla.eoc.hr.clin[,-1]
+row.names(aux) <- hla.eoc.hr.clin[,1]
+aux <- aux[,1:ncol(hla.eoc.p)]
+mRNA_expr_matrix[["TCGA_eoc"]] =  t(aux)
+
+
+gene_sigs_list = list()
+hla2_signature = "MHCIIgenes"
+MHCII.genes <- c("HLA_DPA1","HLA_DPA2","HLA_DPA3","HLA_DPB1","HLA_DPB2","HLA_DQA1","HLA_DQA2","HLA_DQB1",
+                 "HLA_DQB2","HLA_DQB3","HLA_DRA","HLA_DRB1","HLA_DRB2","HLA_DRB3","HLA_DRB4","HLA_DRB5",
+                 "HLA_DRB6","HLA_DRB7","HLA_DRB8","HLA_DRB9","CD74")
+mhcii.intersect.genes <- intersect(row.names(mRNA_expr_matrix$TCGA_eoc), MHCII.genes)
+gene_sigs_list[[hla2_signature]] = mhcii.intersect.genes
+
+mhci.signature = "MHCIgenes"
+MHCI.genes <- c("HLA_A","HLA_B","HLA_C","HLA_E","HLA_F","HLA_G","HLA_H","HLA_J","HLA_K","HLA_L","HLA_N",
+                "HLA_P","HLA_S","HLA_T","HLA_U","HLA_V","HLA_W","HLA_X","HLA_Y","HLA_Z")
+mhci.intersect.genes <- intersect(row.names(mRNA_expr_matrix$TCGA_eoc), MHCI.genes)
+
+gene_sigs_list[[mhci.signature]] = mhci.intersect.genes
+gene_sigs_list
+```
+
+#Running program for MHCII gene signature
+#The result is stored in the out_dir
+```{r}
+make_all_plots(gene_sigs_list = gene_sigs_list,
+               mRNA_expr_matrix = mRNA_expr_matrix,
+               doNegativeControl = FALSE,
+               out_dir = 'D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/SignaturesQC/',
+               showResults = FALSE)
+```
+
+#Reading signature
+```{r}
+MHCII.signature <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/SignaturesQC/standardisation_tables/standardisation_table_MHCIIgenes_TCGA_eoc.txt", sep="\t", header=TRUE)
+
+colnames(MHCII.signature) <- c("MHCII.sig","MHCII.sig.scaled")
+MHCII.signature <- MHCII.signature[hla.eoc.hr.clin$Sample,]
+hla.eoc.hr.clin2 <- cbind(hla.eoc.hr.clin, MHCII.signature)
+
+
+MHCI.signature <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/SignaturesQC/standardisation_tables/standardisation_table_MHCIgenes_TCGA_eoc.txt", sep="\t", header=TRUE)
+
+colnames(MHCI.signature) <- c("MHCI.sig","MHCI.sig.scaled")
+MHCI.signature <- MHCI.signature[hla.eoc.hr.clin$Sample,]
+hla.eoc.hr.clin2 <- cbind(hla.eoc.hr.clin2, MHCI.signature)
+```
+
+
+#Stratifying samples according to MHCII expression and performing survival analysis
 ```{r}
 formulas.names <- c("OS","PFI")
 formulas.labs <- c("OS probability","PFI probability")
 xlim.max.val <- c(150,120)
-dat <- hla.eoc.hr.clin
+dat <- hla.eoc.hr.clin2
 
 formulas.cox <- c('Surv(OS.time, OS) ~ age.bin + Molecular.profile',
               'Surv(PFI.time, PFI)~ age.bin + Molecular.profile')
@@ -141,7 +226,7 @@ formulas.cox <- c('Surv(OS.time, OS) ~ age.bin + Molecular.profile',
 formulas.kapplan <- c('Surv(OS.time, OS) ~  Expression',
               'Surv(PFI.time, PFI)~ Expression')
 
-genes.to.test <- c("MKI67","HLA_DPB1","HLA_A","KRT7")
+genes.to.test <- c("MKI67","HLA_DPB1","HLA_A","KRT7", "MHCII.sig","MHCI.sig")
 for (gene in genes.to.test){
   for (i in 1:length(formulas.kapplan)){
     #For cox model data is stratified by tiles 
@@ -177,6 +262,8 @@ for (gene in genes.to.test){
   }
 }
 ```
+
+
 #Survival only with HRDs or HRPs
 ```{r}
 classes <- list(c("BRCAloss","HRD"), 
@@ -195,7 +282,7 @@ formulas.kapplan <- c('Surv(OS.time, OS) ~  HLA_DPB1.exp',
               'Surv(PFI.time, PFI)~ HLA_DPB1.exp')
 
 for (index in 1:length(classes)){
-  dat <- hla.eoc.hr.clin[hla.eoc.hr.clin$Molecular.profile %in% classes[[index]],]
+  dat <- hla.eoc.hr.clin2[hla.eoc.hr.clin2$Molecular.profile %in% classes[[index]],]
   
   for (i in 1:length(formulas.kapplan)){
     #For cox model data is stratified by tiles 
@@ -235,7 +322,8 @@ for (index in 1:length(classes)){
 ```{r}
 MHCII.genes <- c("HLA-DPA1","HLA-DPA2","HLA-DPA3","HLA-DPB1","HLA-DPB2","HLA-DQA1","HLA-DQA2","HLA-DQB1",
                  "HLA-DQB2","HLA-DQB3","HLA-DRA","HLA-DRB1","HLA-DRB2","HLA-DRB3","HLA-DRB4","HLA-DRB5",
-                 "HLA-DRB6","HLA-DRB7","HLA-DRB8","HLA-DRB9")
+                 "HLA-DRB6","HLA-DRB7","HLA-DRB8","HLA-DRB9","CD74")
+
 MHCII.genes <- gsub("-","_", MHCII.genes)
 
 #MHCII.genes <- c("HLA_DPB1")
@@ -246,11 +334,11 @@ MHCI.genes <- gsub("-","_", MHCI.genes)
 
 MHCII.mean.expression <- hla.eoc.p %>% mutate(Sample=row.names(.)) %>%
                             select(Sample, any_of(MHCII.genes)) %>% melt() %>% 
-                            group_by(Sample) %>% summarise(MHCII.mean.exp=median(value))
+                            group_by(Sample) %>% summarise(MHCII.mean.exp=mean(value))
 
 MHCI.mean.expression <- hla.eoc.p %>% mutate(Sample=row.names(.)) %>%
                             select(Sample, any_of(MHCI.genes)) %>% melt() %>% 
-                            group_by(Sample) %>% summarise(MHCI.mean.exp=median(value))
+                            group_by(Sample) %>% summarise(MHCI.mean.exp=mean(value))
 
 mhc.mean.exp <- cbind(MHCII.mean.expression, MHCI.mean.expression[,-1])
 
@@ -280,13 +368,23 @@ df$Molecular.profile <- factor(df$Molecular.profile, levels=c("BRCAloss","HRD","
 
 df$Molecular.profile2 <- ifelse(df$Molecular.profile == "HRP" | df$Molecular.profile == "CCNE1amp", "HRPs","HRDs")
 
+wilcox.test(df[which(df$Molecular.profile == "BRCAloss"),"HLA_DPB1"],
+            df[which(df$Molecular.profile == "HRP"),"HLA_DPB1"], alternative = "greater")
+
+wilcox.test(df[which(df$Molecular.profile == "BRCAloss"),"HLA_DPB1"],
+            df[which(df$Molecular.profile == "CCNE1amp"),"HLA_DPB1"], alternative = "greater")
+
+wilcox.test(df[which(df$Molecular.profile == "BRCAloss"),"HLA_DPB1"],
+            df[which(df$Molecular.profile == "HRD"),"HLA_DPB1"], alternative = "greater")
+
+
 p <- ggplot(df, aes(x=Molecular.profile, y=HLA_DPB1)) +
       geom_point(aes(col=Molecular.profile), position= position_jitter(width= .1), alpha = 0.5) +
       geom_boxplot(outlier.shape=NA, fill=NA, width=0.3) +
       geom_violin(fill=NA) +
-      labs(title="TCGA cancer-cells deconvoluted expression", subtitle="N=252") +
+      labs(title="TCGA cancer-cells deconvoluted expression", subtitle="N=238") +
       ylab("HLA_DPB1 deconv RNA expression") +
-      theme_bw() + ylim(0,0.00065)
+      theme_bw() + ylim(0,0.00042)
 print(p)
 ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_molecular_profiles.png"), width = 13,
                       height = 11, units = "cm")
@@ -295,7 +393,6 @@ ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_molecular_profiles.pn
 
 ###Selecting deconvoluted RNA expression of immune cells
 ```{r}
-
 #Selecting the expression columns that comes from Epithelial Ovarian Cancer
 immune.exp <- deconv[,c(1,grep("Immune", colnames(deconv)))]
 immune.genes <- immune.exp$symbol
@@ -327,16 +424,87 @@ immune.exp.hr.clin <- merge(immune.exp.clin, HRD.tab.cat, by="Sample")
 dim(immune.exp.hr.clin)
 ```
 
+#Preparing dataset to calculate MHCII gene signature in INMUNE component
+```{r}
+#These are the genes differentially expressed using bulk-RNA
+tcga.DE.genes <- read.table(file="C:/Users/fernpere/Downloads/RNAseq_TCGA/Overexpressed_genes.csv",
+                          sep=",", header=TRUE)
+
+mRNA_expr_matrix = list()
+aux <- immune.exp.hr.clin[,-1]
+row.names(aux) <- immune.exp.hr.clin[,1]
+aux <- aux[,1:ncol(immune.exp.p)]
+mRNA_expr_matrix[["TCGA_immune"]] =  t(aux)
+
+gene_sigs_list = list()
+
+gene_list_names = c("MHCIIgenes", "MHCIgenes","NanostringDE","Intersected","TCGAbulkDE")
+list_of_genes=list(c("HLA_DPA1","HLA_DPA2","HLA_DPA3","HLA_DPB1","HLA_DPB2","HLA_DQA1","HLA_DQA2","HLA_DQB1",
+                 "HLA_DQB2","HLA_DQB3","HLA_DRA","HLA_DRB1","HLA_DRB2","HLA_DRB3","HLA_DRB4","HLA_DRB5",
+                 "HLA_DRB6","HLA_DRB7","HLA_DRB8","HLA_DRB9","CD74"),
+                 c("HLA_A","HLA_B","HLA_C","HLA_E","HLA_F","HLA_G","HLA_H","HLA_J","HLA_K","HLA_L",
+                   "HLA_N","HLA_P","HLA_S","HLA_T","HLA_U","HLA_V","HLA_W","HLA_X","HLA_Y","HLA_Z"),
+                c("CD74", "CXCL9", "CXCL10", "CXCL11","IDO1", "ADAMDEC1", "SLAMF7", "CCL5", "CD3D"),
+                c("CCL5", "CD74", "CXCL9"),
+                tcga.DE.genes$gene)
+
+for (i in 1:length(gene_list_names)){
+  genes <- intersect(row.names(mRNA_expr_matrix$TCGA_immune), list_of_genes[[i]])
+  gene_sigs_list[[gene_list_names[i]]] = genes
+}
+
+gene_sigs_list
+```
+
+
+#Running program for MHCII gene signature
+#The result is stored in the out_dir
+```{r}
+out.put.dir = 'D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/SignaturesQC_immune/'
+
+make_all_plots(gene_sigs_list = gene_sigs_list,
+               mRNA_expr_matrix = mRNA_expr_matrix,
+               doNegativeControl = FALSE,
+               out_dir = out.put.dir,
+               showResults = FALSE)
+```
+
+
+#Reading signatures and merging results with dataset
+```{r}
+standarization_tables <- list.files(paste0(out.put.dir,"/standardisation_tables"),
+                                    pattern = "_TCGA_immune.txt", full.names = TRUE)
+
+
+MHCII.signature <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/SignaturesQC/standardisation_tables/standardisation_table_MHCIIgenes_TCGA_eoc.txt", sep="\t", header=TRUE)
+
+colnames(MHCII.signature) <- c("MHCII.sig","MHCII.sig.scaled")
+MHCII.signature <- MHCII.signature[hla.eoc.hr.clin$Sample,]
+hla.eoc.hr.clin2 <- cbind(hla.eoc.hr.clin, MHCII.signature)
+
+immune.exp.hr.clin2 = immune.exp.hr.clin
+
+for (f in (standarization_tables)){
+  signature.name <- strsplit(basename(f), "_")[[1]][3]
+  sig <- read.table(file=f, sep="\t", header=TRUE)
+  colnames(sig) <- c(paste0(signature.name,".sig"), paste0(signature.name,".sig.scaled"))
+  immune.exp.hr.clin2 <- cbind(immune.exp.hr.clin2, sig[immune.exp.hr.clin$Sample,])
+}
+```
+
+
 
 #Stratiifying samples according to MHCII expression and performing survival analysis
 ```{r}
-total.genes.to.test <- c("HLA_DPB1","HLA_A", "CD74", "CXCL9", "CXCL10", "CXCL11",
+total.genes.to.test <- c("CD74", "CXCL9", "CXCL10", "CXCL11",
                    "IDO1", "ADAMDEC1", "SLAMF7", "CCL5", "CD3D")
 
 hrp.genes.to.test <- c("CRABP1", "CD2", "SLAMF7", "ADAMDEC1", "CD3E", "CD27", "CTLA4", 
                       "CD3D", "CXCL9", "CXCL10", "CXCL11", "IDO1")
 
-genes.to.test <- unique(hrp.genes.to.test, total.genes.to.test)
+signatures <- paste0(gene_list_names, ".sig")
+
+genes.to.test <- unique(c(hrp.genes.to.test, total.genes.to.test, signatures))
 
 out.put.folder2 <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/Immune_deconv/"
 
@@ -344,7 +512,7 @@ out.put.folder2 <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validatio
 formulas.names <- c("OS","PFI")
 formulas.labs <- c("OS probability","PFI probability")
 xlim.max.val <- c(150,120)
-dat <- immune.exp.hr.clin
+dat <- immune.exp.hr.clin2
 
 formulas.cox <- c('Surv(OS.time, OS) ~ age.bin + Molecular.profile',
               'Surv(PFI.time, PFI)~ age.bin + Molecular.profile')
@@ -471,7 +639,7 @@ out.rem <- function(x){
 }
 
 dat2 <- immune.exp.hr.clin
-dat2$HLA.eoc <- ntile(hla.eoc.hr.clin$HLA_DPB1,3)
+dat2$HLA.eoc <- ntile(hla.eoc.hr.clin$HLA_DPB1,3) #Stratifying samples in 3 groups according to MHCII in eoc
 
 total.genes.to.test <- c("CD74", "CXCL9", "CXCL10", "CXCL11",
                    "IDO1", "ADAMDEC1", "SLAMF7", "CCL5", "CD3D")
@@ -479,7 +647,7 @@ total.genes.to.test <- c("CD74", "CXCL9", "CXCL10", "CXCL11",
 hrp.genes.to.test <- c("CRABP1", "CD2", "SLAMF7", "ADAMDEC1", "CD3E", "CD27", "CTLA4", 
                       "CD3D", "CXCL9", "CXCL10", "CXCL11")
 
-genes.to.test <- unique(hrp.genes.to.test, total.genes.to.test)
+genes.to.test <- unique(c(total.genes.to.test))
 
 mat <- dat2 %>% select(any_of(c(genes.to.test))) %>% 
                 mutate_all(., out.rem) %>% scale() %>% t()
@@ -497,12 +665,50 @@ png(paste0(out.put.folder, "Heatmap_HLA-DPB1_Immune_genes_expresssion.png"), res
 Heatmap(mat, top_annotation = ha, name="Z-score\nexpression")
 dev.off()
 ```
+
+
 #Boxplots for expression accross molecular profiles
 ```{r}
 genes.exp.immune <- as.data.frame(t(mat))
 df <- data.frame(Sample=dat2$Sample,  MHCII.eoc.strat=dat2$HLA.eoc,
                  Molecular.profile=factor(dat2$Molecular.profile, levels=c("BRCAloss","HRD","HRP","CCNE1amp")))
 df <- cbind(df, genes.exp.immune)
+
+aux <- df %>% filter(MHCII.eoc.strat != 2) %>%
+              mutate(MHCII.eoc = ifelse(MHCII.eoc.strat==1, "Low","High")) %>% 
+              select(-MHCII.eoc.strat) %>%
+              melt() %>% 
+              mutate(Molecular.profile2 = case_when(Molecular.profile %in% c("BRCAloss","HRD") ~ "HRD",
+                                         Molecular.profile %in% c("HRP","CCNE1amp") ~ "HRP"))
+
+colnames(aux)[4] <- "Gene"
+
+for (m in unique(aux$Molecular.profile2)){
+  print(m)
+  for (gen in unique(aux$Gene)){
+    d <- aux %>% filter(Gene == gen,
+                        Molecular.profile2 == m)  
+    w.res  <- wilcox.test(d[d$MHCII.eoc == "High","value"],
+                          d[d$MHCII.eoc == "Low","value"])
+    print(paste0("Difference between high and low MHCII, for ", gen, " pvalue: ", w.res$p.value))
+  }
+}
+
+p <- ggplot(aux, aes(x=Gene, y=value, fill=MHCII.eoc)) +
+  geom_violin(aes(fill=MHCII.eoc)) +
+  geom_boxplot(aes(fill=MHCII.eoc),width=0.15, outlier.shape = NA, position = position_dodge(0.9)) +
+  stat_summary(geom = "errorbar", fun.y = "median", aes(ymax = ..y.., ymin = ..y..), width=0.6, size = 0.8,
+               position = position_dodge(0.9)) +
+  scale_fill_manual(values = c("yellow3","deepskyblue3")) +
+  xlab("") + theme_bw() + ylab("Deconvoluted immune cell expression") +
+  facet_wrap(~Molecular.profile2) + ylim(-1,2.5) +
+  theme(axis.text.x = element_text(angle = 55, hjust=1))
+print(p)
+ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_Immune_genes_expresssion.png"), width = 27,
+                      height = 12, units = "cm")
+ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_Immune_genes_expresssion.svg"), width = 27,
+                      height = 12, units = "cm")
+
 
 #genes.exp.immune
 colnames(df)[1] <- "Sample"
@@ -520,13 +726,20 @@ my_levels <- c("BRCAloss1","BRCAloss2","BRCAloss3","HRD1","HRD2","HRD3","HRP1","
 
 df$Class <- factor(df$Class, levels=my_levels)
 
+
 p <- ggplot(df, aes(x=Class, y=Expression, col=Molecular.profile)) +
         geom_boxplot() + xlab("") + theme_bw() +
         theme(axis.text.x = element_text(angle = 75, hjust = 1)) +
         facet_wrap(~Gene)
+print(p)
 ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_Immune_genes_expresssion_Mprofiles.png"), width = 20,
                       height = 16, units = "cm")
+
+
+
 ```
+
+
 
 #Cox model and Kapplan-Mair using sum of all immune gene expressions
 ```{r}
