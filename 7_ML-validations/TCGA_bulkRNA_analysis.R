@@ -8,6 +8,7 @@ library(sigQC)
 library(survival)
 library(survminer)
 library(gridExtra)
+library(reshape2)
 
 
 
@@ -126,7 +127,11 @@ mRNA_expr_matrix[["TCGA_bulk"]] =  t(aux)
 
 gene_sigs_list = list()
 
-gene_list_names = c("MHCIIgenes", "MHCIgenes","NanostringDE","Intersected","TCGAbulkDE")
+interferon1.genes <- c("IFNA1","IFNA2","IFNA4", "IFNA5", "IFNA6", "IFNA7", "IFNA8", "IFNA10", "IFNA13",
+                       "IFNA14", "IFNA16", "IFNA17", "IFNA21", "IFNB1", "IFNB1", "IFNW1", "IFNK",
+                       "IFNE", "IFNAR1", "IFNAR2", "JAK1", "TYK2", "STAT1", "STAT2", "IRF9")
+
+gene_list_names = c("MHCIIgenes", "MHCIgenes","NanostringDE","Intersected","TCGAbulkDE","Interferon1")
 list_of_genes=list(c("HLA-DPA1","HLA-DPA2","HLA-DPA3","HLA-DPB1","HLA-DPB2","HLA-DQA1","HLA-DQA2","HLA-DQB1",
                      "HLA-DQB2","HLA-DQB3","HLA-DRA","HLA-DRB1","HLA-DRB2","HLA_DRB3","HLA_DRB4","HLA-DRB5",
                      "HLA-DRB6","HLA-DRB7","HLA-DRB8","HLA-DRB9","CD74"),
@@ -134,7 +139,8 @@ list_of_genes=list(c("HLA-DPA1","HLA-DPA2","HLA-DPA3","HLA-DPB1","HLA-DPB2","HLA
                      "HLA-N","HLA-P","HLA-S","HLA-T","HLA-U","HLA-V","HLA-W","HLA-X","HLA-Y","HLA-Z"),
                    c("CD74", "CXCL9", "CXCL10", "CXCL11","IDO1", "ADAMDEC1", "SLAMF7", "CCL5", "CD3D"),
                    c("CCL5", "CD74", "CXCL9"),
-                   tcga.DE.genes$gene)
+                   tcga.DE.genes$gene,
+                   interferon1.genes)
 
 for (i in 1:length(gene_list_names)){
   genes <- intersect(row.names(mRNA_expr_matrix$TCGA_bulk), list_of_genes[[i]])
@@ -296,6 +302,14 @@ for (index in 1:length(classes)){
 
 ################### Exploring the relationship of MHCII expression in cancer cells and immune gen expression
 #Remove outlier function
+#Merging bulk expression with MHCII deconvoluted expression
+EOC.mhcii <- EOC.deconv %>% select(all_of(c("Sample","HLA_DPB1"))) %>% 
+                            mutate(MHCII.eoc.strat = ntile(HLA_DPB1, 3))
+EOC.mhcii$Sample <- gsub("-",".", EOC.mhcii$Sample)
+dat3 <- merge(dat2, EOC.mhcii, by.x="bcr_patient_barcode", by.y="Sample")
+
+
+#Remove outlier function
 out.rem <- function(x){
   iqr.x <- IQR(x)
   quantile3 <- quantile(x, 0.75)
@@ -310,13 +324,15 @@ total.genes.to.test <- c("CD74", "CXCL9", "CXCL10", "CXCL11",
 
 genes.to.test <- unique(c(total.genes.to.test))
 
-mat <- dat2 %>% select(any_of(c(genes.to.test))) %>% 
+mat <- dat3 %>% select(any_of(c(genes.to.test))) %>% 
   mutate_all(., out.rem) %>% scale() %>% t()
 
 
 genes.exp.immune <- as.data.frame(t(mat))
-df <- data.frame(Sample=dat2$Sample,  MHCII.eoc.strat=dat2$HLA.eoc,
-                 Molecular.profile=factor(dat2$Molecular.profile, levels=c("BRCAloss","HRD","HRP","CCNE1amp")))
+
+
+df <- data.frame(Sample=dat3$bcr_patient_barcode,  MHCII.eoc.strat=dat3$MHCII.eoc.strat,
+                 Molecular.profile=factor(dat3$Molecular.profile, levels=c("BRCAloss","HRD","HRP","CCNE1amp")))
 df <- cbind(df, genes.exp.immune)
 
 aux <- df %>% filter(MHCII.eoc.strat != 2) %>%
@@ -342,10 +358,83 @@ for (m in unique(aux$Molecular.profile2)){
 p <- ggplot(aux, aes(x=Gene, y=value, fill=MHCII.eoc)) +
   geom_violin(aes(fill=MHCII.eoc)) +
   geom_boxplot(aes(fill=MHCII.eoc),width=0.15, outlier.shape = NA, position = position_dodge(0.9)) +
-  stat_summary(geom = "errorbar", fun.y = "median", aes(ymax = ..y.., ymin = ..y..), width=0.6, size = 0.8,
+  stat_summary(geom = "errorbar", fun = "median", aes(ymax = ..y.., ymin = ..y..), linewidth=0.6, size = 0.8,
                position = position_dodge(0.9)) +
   scale_fill_manual(values = c("yellow3","deepskyblue3")) +
   xlab("") + theme_bw() + ylab("Deconvoluted immune cell expression") +
-  facet_wrap(~Molecular.profile2) + ylim(-1,2.5) +
+  facet_wrap(~Molecular.profile2) + ylim(-1.3,2.7) +
   theme(axis.text.x = element_text(angle = 55, hjust=1))
 print(p)
+ggsave(p, file=paste0(out.put.folder, "Boxplot_gene_expression_MHCII_lowHigh.svg"),
+       width = 20, height = 13, units = "cm")
+
+
+########### TCGA stat activation in EOC #####################
+
+#Merging bulk expression with MHCII deconvoluted expression
+EOC.mhcii <- EOC.deconv %>% select(all_of(c("Sample","HLA_DPB1","STAT1","STAT2"))) %>% 
+                            mutate(MHCII.eoc.strat = factor(ntile(HLA_DPB1, 3), labels = c("Low","Mid", "High")))
+EOC.mhcii$Sample <- gsub("-",".", EOC.mhcii$Sample)
+dat3 <- merge(dat2, EOC.mhcii, by.x="bcr_patient_barcode", by.y="Sample")
+
+df <- dat3 %>% select(bcr_patient_barcode, MHCII.eoc.strat, STAT1.x, STAT1.y, Interferon1.sig) 
+
+p <- ggplot(df, aes(x=MHCII.eoc.strat, y=Interferon1.sig)) + geom_boxplot()
+print(p)
+
+
+########## TCGA neo-antigens and immune composition#####################
+neoantigens <- read.table(file="D:/users/fperez/NKI_TMAs_AF/TCGA_PRISM_RNAdeconvolution/Neoantigens/TCGA_pMHC_SNV_sampleSummary_MC3_v0.2.8.CONTROLLED_170404.tsv",
+           sep="\t", header=TRUE)
+
+cibertsort <- read.table(file="D:/users/fperez/NKI_TMAs_AF/TCGA_PRISM_RNAdeconvolution/Neoantigens/TCGA.Kallisto.fullIDs.cibersort.relative.tsv",
+                          sep="\t", header=TRUE)
+
+
+neoantigens$barcode  <- sapply(neoantigens$barcode, function(x){paste(strsplit(x,"-")[[1]][1:3],collapse = ".")})
+cibertsort$SampleID  <- sapply(cibertsort$SampleID, function(x){paste(strsplit(x,"[.]")[[1]][1:3],collapse = ".")})
+
+cibertsort <- cibertsort %>% filter(CancerType=="OV") %>% 
+                             select(-P.value, -Correlation, -RMSE, -CancerType) %>% 
+                            mutate(T.cells.CD4=(T.cells.CD4.naive + T.cells.CD4.memory.resting + T.cells.CD4.memory.activated),
+                                   Dendritic.cells=(Dendritic.cells.resting + Dendritic.cells.activated)) %>% 
+                            melt()
+colnames(cibertsort)[c(2,3)] <- c("Celltype","Proportion")
+cibertsort$Celltype <- as.character(cibertsort$Celltype)
+
+
+neoantigens.mhcii <- merge(neoantigens, EOC.mhcii, by.x="barcode", by.y="Sample")
+cibertsort.mhcii <- merge(cibertsort, EOC.mhcii, by.x="SampleID", by.y="Sample")
+
+
+cibertsort.mhcii$Celltype[cibertsort.mhcii$Celltype == "T.cells.regulatory..Tregs."] <- "T.cells.regulatory"
+
+cells.interest <- c("T.cells.CD4", "T.cells.regulatory", "T.cells.CD8", 
+                     "Macrophages.M0", "Macrophages.M1", "Macrophages.M2")
+
+
+df <- cibertsort.mhcii %>% filter(Celltype %in% cells.interest)
+
+
+df$Celltype <- factor(df$Celltype, levels=cells.interest)
+
+
+my_comparisons <- list( c("Low", "Mid"), c("Mid", "High"), c("Low", "High") )
+
+
+p <- ggboxplot(df, x = "MHCII.eoc.strat", y = "Proportion") + facet_wrap(~Celltype) +
+  theme_bw() + xlab("HLA_DPB1 expression") +
+  theme(axis.title = element_text(size=rel(1.2)),
+        axis.text = element_text(size=rel(1.2)),
+        strip.text = element_text(size=rel(1.15))) + 
+  stat_compare_means(comparisons = my_comparisons,
+                     symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols=c("****", "***", "**", "*", "ns"))) +
+  ylim(0,1) + xlab("HLA_DPB1 expression in EOC component") +
+  ylab("CIBERTSORT cell type propotions")
+print(p)
+ggsave(p,
+       file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/CIBERSORT_cell_proportions.png",
+       width = 13, height = 15, units = "cm")
+ggsave(p,
+       file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/CIBERSORT_cell_proportions.svg",
+       width = 13, height = 15, units = "cm")

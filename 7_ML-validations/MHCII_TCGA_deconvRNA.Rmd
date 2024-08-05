@@ -378,15 +378,24 @@ wilcox.test(df[which(df$Molecular.profile == "BRCAloss"),"HLA_DPB1"],
             df[which(df$Molecular.profile == "HRD"),"HLA_DPB1"], alternative = "greater")
 
 
-p <- ggplot(df, aes(x=Molecular.profile, y=HLA_DPB1)) +
-      geom_point(aes(col=Molecular.profile), position= position_jitter(width= .1), alpha = 0.5) +
-      geom_boxplot(outlier.shape=NA, fill=NA, width=0.3) +
-      geom_violin(fill=NA) +
-      labs(title="TCGA cancer-cells deconvoluted expression", subtitle="N=238") +
-      ylab("HLA_DPB1 deconv RNA expression") +
-      theme_bw() + ylim(0,0.00042)
+# p <- ggplot(df, aes(x=Molecular.profile, y=HLA_DPB1)) +
+#       geom_point(aes(col=Molecular.profile), position= position_jitter(width= .1), alpha = 0.5) +
+#       geom_boxplot(outlier.shape=NA, fill=NA, width=0.3) +
+#       geom_violin(fill=NA) +
+#       labs(title="TCGA cancer-cells deconvoluted expression", subtitle="N=238") +
+#       ylab("HLA_DPB1 deconv RNA expression") +
+#       theme_bw() + ylim(0,0.00042)
+
+my_comparisons <- list( c("BRCAloss", "HRD"), c("BRCAloss", "HRP"), c("BRCAloss", "CCNE1amp"))
+
+
+p <- ggviolin(df, x="Molecular.profile", y="HLA_DPB1", add = "boxplot", add.params = list(fill = "white")) +
+      stat_compare_means(comparisons = my_comparisons, label = "p.signif",
+                         method.args = list(alternative = "greater")) +
+      xlab("")
+
 print(p)
-ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_molecular_profiles.png"), width = 13,
+ggsave(p, filename=paste0(out.put.folder,"Boxplot_HLA-DPB1_molecular_profiles.png"), width = 11,
                       height = 11, units = "cm")
 ```
 
