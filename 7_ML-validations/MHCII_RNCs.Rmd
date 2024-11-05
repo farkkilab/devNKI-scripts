@@ -103,6 +103,7 @@ order <- c("RCN01", "RCN03", "RCN11", "RCN02", "RCN05", "RCN06", "RCN09", "RCN12
 
 names(new.vals) <- order
 RCN.annotations$RCN.id.collapsed.ordered <- new.vals[RCN.annotations$RCN.id.collapsed.ordered]
+RCN.annotations
 ```
 
 
@@ -140,6 +141,8 @@ cancers.clin <- merge(cancers.pat, M.profiles.clin, by="patient")
 
 cancers.clin$Molecular.profile2 <- factor(cancers.clin$Molecular.profile2,
                                           levels=c("BRCAmut/met","HRD","HRP","CCNE1amp","Other"))
+
+cancers.clin$therapy_sequence2 <- ifelse(cancers.clin$therapy_sequence == "NACT", "IDS", "PDS")
 ```
 
 
@@ -153,9 +156,9 @@ mycolors <- c("#ffc1ff", "#b400b4", "#f7f0f7","#ffc1ff","#ff4eff",
               "#FFE4C4","#ff3333","#ff6e4a", "#00ffff","#8a2be2","#00d800")
 
 
-cancers.pds <- cancers.clin %>% filter(!grepl("NACT",therapy_sequence),
-                                       !is.na(therapy_sequence),
-                                       Molecular.profile2 == "BRCAmut/met")
+for (t in c("IDS", "PDS")){
+cancers.pds <- cancers.clin %>% filter(therapy_sequence2 == {t},
+                                       !is.na(therapy_sequence2))
 
 df <- cancers.pds
 
@@ -180,9 +183,9 @@ p <- ggplot(df, aes(x=rcn_id, y=log2(MHCII))) +
               legend.text = element_text(size=rel(1.2))) +
         scale_fill_manual(values = mycolors) + ylim(9.5,17)
 print(p)
-ggsave(p, filename = paste0(out.folder.name,"/MHCII_expression_RNCs_BRCAmut_PDS.svg"),
-       height = 10, width = 16, units = "cm")
-
+ ggsave(p, filename = paste0(out.folder.name,"/MHCII_expression_RNCs_",t,".svg"),
+        height = 10, width = 16, units = "cm")
+}
 ```
 
 

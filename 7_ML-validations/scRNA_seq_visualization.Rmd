@@ -1,0 +1,62 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggrepel)
+library(pheatmap)
+library(RColorBrewer)
+```
+
+
+
+```{r}
+deg <- read.table(file="D:/users/fperez/NKI_TMAs_AF/sc-RNAseq-Matias/Cellprortions and INF/DEG_scRNAseq_epithelial_MHCII_high_vs_low.csv",
+                  sep=",", header = TRUE)
+
+sc.inf.genes <- read.table(file="D:/users/fperez/NKI_TMAs_AF/sc-RNAseq-Matias/Cellprortions and INF/correlation_interferon_genes_expression_vs_mhc2_scores_pseudobulk.tsv",
+                     header=TRUE, sep="\t")
+
+sc.antigens <- read.table(file="D:/users/fperez/NKI_TMAs_AF/sc-RNAseq-Matias/Cellprortions and INF/correlation_15_genes_expression_vs_mhc2_scores_pseudobulk_epithelial.tsv",
+                     header=TRUE, sep="\t")
+```
+
+#Doing volcano plot
+```{r}
+#Thresholds for significant genes
+padj_threshold <- 0.05
+log2fc_threshold <- 2
+
+
+p <- ggplot(deg, aes(x = logFC, y = -log10(adj.P.Val))) +
+        geom_point(aes(color = adj.P.Val < padj_threshold & abs(logFC) >= log2fc_threshold), alpha = 0.5) +
+        scale_color_manual(values = c("gray", "red")) +
+        geom_text_repel(
+          data = deg %>% filter(((adj.P.Val < padj_threshold) & abs(logFC) >= log2fc_threshold)),
+          aes(label = Gene),
+          size = 4,
+          box.padding = unit(0.35, "lines"),
+          point.padding = unit(0.3, "lines"),
+          max.overlaps=100) +
+        theme_classic() +
+        geom_vline(xintercept = log2fc_threshold, lty=2, col="grey") +  
+        geom_vline(xintercept = -log2fc_threshold, lty=2, col="grey") +  
+        geom_hline(yintercept = -log10(padj_threshold), lty=2, col="grey") +
+        labs(x = "Log2 Fold Change", y = "-log10 Adjusted P-value", color = "Significant") +
+        theme(legend.position = "none",
+              axis.title = element_text(size=rel(1.2)),
+              axis.text = element_text(size=rel(1.1))) 
+
+print(p)
+
+```
+
+```{r}
+length(unique(sc.antigens$sample))
+```
+

@@ -14,7 +14,7 @@ library(reshape2)
 
 ################### Reading counts ###########################
 
-TCGA.bulk.counts <- read.table(file="C:/Users/fernpere/Downloads/RNAseq_TCGA/BulkRNA_TCGA_OVA_augmented_star_gene_counts.tsv",
+TCGA.bulk.counts <- read.table(file="D:/users/fperez/NKI_TMAs_AF/RNAseq_TCGA/BulkRNA_TCGA_OVA_augmented_star_gene_counts.tsv",
                                sep="\t", header=TRUE)
 
 #Reading de-convoluted expression of EOC
@@ -112,7 +112,7 @@ rm(norm.counts.clin.prev)
 ################# Preparing dataset for signature dectection #####################
 
 #These are the genes differential expressed using bulk-RNA
-tcga.DE.genes <- read.table(file="C:/Users/fernpere/Downloads/RNAseq_TCGA/Overexpressed_genes.csv",
+tcga.DE.genes <- read.table(file="D:/users/fperez/NKI_TMAs_AF/RNAseq_TCGA/Overexpressed_genes.csv",
                             sep=",", header=TRUE)
 
 #Detecting the first and last gene column in dataset
@@ -438,3 +438,77 @@ ggsave(p,
 ggsave(p,
        file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/CIBERSORT_cell_proportions.svg",
        width = 13, height = 15, units = "cm")
+
+
+
+
+df <- neoantigens.mhcii %>% select(barcode, MHCII.eoc.strat, numberOfNonSynonymousSNP, numberOfImmunogenicMutation,
+                             numberOfBindingPMHC, numberOfBindingExpressedPMHC)
+exp.hladpb1 <- neoantigens.mhcii %>% select(barcode, HLA_DPB1)
+df <- melt(df)
+df <- merge(df, exp.hladpb1)
+p<- ggplot(df, aes(x=HLA_DPB1, y=value)) + geom_point() + theme_bw() +
+    facet_wrap(~variable) + geom_smooth() + stat_cor()
+print(p)
+ggsave(p,
+       file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/Neo_antigens_proportions.svg",
+       width = 15, height = 15, units = "cm")
+
+
+###########Analysis for prediction of survival using CD8.T cells #########
+
+output.folder3 <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/"
+
+cibertsort <- read.table(file="D:/users/fperez/NKI_TMAs_AF/TCGA_PRISM_RNAdeconvolution/Neoantigens/TCGA.Kallisto.fullIDs.cibersort.relative.tsv",
+                         sep="\t", header=TRUE)
+
+cibertsort$SampleID  <- sapply(cibertsort$SampleID, function(x){paste(strsplit(x,"[.]")[[1]][1:3],collapse = ".")})
+
+
+formulas.names <- c("OS","PFI")
+formulas.labs <- c("OS probability","PFI probability")
+xlim.max.val <- c(150,120)
+
+formulas.cox <- c('Surv(OS.time, OS) ~ age.bin + Molecular.profile',
+                  'Surv(PFI.time, PFI)~ age.bin + Molecular.profile')
+
+cibertsort.clin <- merge(cibertsort, clin.dat, by.x="SampleID", by.y="bcr_patient_barcode")
+cibertsort.clin2 <- merge(cibertsort.clin, HRD.tab.cat, by.x="SampleID", by.y="Sample")
+cibert.mhcii.clin2 <- merge(cibertsort.clin2, EOC.mhcii, by.x="SampleID", by.y="Sample")
+
+dat <- cibert.mhcii.clin2
+
+vars <- c("HLA_DPB1", "T.cells.CD8")
+
+for (variable in vars){
+  for (i in 1:length(formulas.cox)){
+      dat$Expression <- ntile(dat[,variable],3)
+      colnames(dat)[colnames(dat) == "Expression"] = paste0(variable,".strat")
+      
+      model <- coxph(as.formula(paste0(formulas.cox[i]," + ", paste0(variable,".strat"))), data=dat)
+      p1 <- ggforest(model, data = dat,  main=formulas.labs[i])
+      print(p1)
+      ggsave(file=paste0(output.folder3,"Cox_",variable,"_",formulas.names[i],".png"),
+               width = 14, height = 10, units = "cm")
+  }
+}
+
+dat <- cibert.mhcii.clin2 %>% filter(Molecular.profile == "CCNE1amp" | 
+                                       Molecular.profile == "HRP")
+
+formulas.cox <- c('Surv(OS.time, OS) ~ age.bin',
+                  'Surv(PFI.time, PFI)~ age.bin')
+
+for (variable in vars){
+  for (i in 1:length(formulas.cox)){
+    dat$Expression <- ntile(dat[,variable],3)
+    colnames(dat)[colnames(dat) == "Expression"] = paste0(variable,".strat")
+    
+    model <- coxph(as.formula(paste0(formulas.cox[i]," + ", paste0(variable,".strat"))), data=dat)
+    p1 <- ggforest(model, data = dat,  main=formulas.labs[i])
+    print(p1)
+    ggsave(file=paste0(output.folder3,"Cox_",variable,"_",formulas.names[i],"_HRPs.png"),
+           width = 14, height = 7, units = "cm")
+  }
+}
+

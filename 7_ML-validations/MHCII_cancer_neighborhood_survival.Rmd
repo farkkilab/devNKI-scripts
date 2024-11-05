@@ -13,6 +13,8 @@ library(tidyverse)
 library(ComplexHeatmap)
 library(survival)
 library(survminer)
+library(reshape2)
+library(ggpubr)
 ```
 
 
@@ -109,15 +111,15 @@ to.scimap$CellId <- CellId
 
 to.scimap <- to.scimap %>%  select(imageid, CellId, everything()) %>% select(-cycif.slide, -cycif.core.id)
 
-write.table(to.scimap,
-            file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format_all_channels_20240416.csv",
-            sep=",", row.names = FALSE)
+# write.table(to.scimap,
+#             file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format_all_channels_20240416.csv",
+#             sep=",", row.names = FALSE)
 to.scimap
 ```
 
 #Reading cell neighborhood information
 ```{r}
-neighbors.counts <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Spatial-cell-proportions_radious46px_metaclusters_20240112.csv",
+neighbors.counts <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Spatial-cell-counts_radious46px_20231101.csv",
                                sep=",", header = TRUE)
 ```
 
@@ -142,25 +144,70 @@ t.dat$cellid <- as.numeric(t.dat$cellid)
 neighbors2 <- cbind(neighbors.counts, t.dat)
 head(neighbors2)
 ```
+#Generating mask of CD8.T cell probability for Figure1
+```{r}
+# core10mask <- neighbors2 %>% filter(slide=="TMA_18_810",
+#                       core=="core10") %>% 
+#                mutate(Core_Names=paste0(core,"_Probabilities_cytomask2")) %>% 
+#                select(Core_Names, cellid, CD8.T.cells)
+# 
+# colnames(core10mask)[2] <- "Cellid"
+# colnames(core10mask)[3] <- "proba_0"
+# 
+# core10mask$proba_0[which(core10mask$proba_0  == 0)]  <- 0.00001
+# 
+# core10mask$proba_0 <-  core10mask$proba_0 + 1
+# 
+# core10mask$Cellid <- as.numeric(core10mask$Cellid)
+# write.table(core10mask, 
+#             file="D:/users/fperez/NKI_TMAs_AF/TMA_18_810/Spatial-cell-counts_radious46px_core10_for_napari.csv",
+#             row.names=FALSE, sep=",")
+```
+
 
 ```{r}
-core10mask <- neighbors2 %>% filter(slide=="TMA_18_810",
-                      core=="core10") %>% 
-               mutate(Core_Names=paste0(core,"_Probabilities_cytomask2")) %>% 
-               select(Core_Names, cellid, CD8.T.cells)
+core58.cancer <- cancers.dat %>% filter(cycif.slide=="TMA_34_504", cycif.core.id=="core29") %>%
+                                 mutate(Row.name = paste0(cycif.slide, "_", cycif.core.id, "_c", CellId)) %>%
+                                 select(Row.name, ECadherin, CK7, MHCII, MHCII.bin) %>% 
+                                 mutate(log2.CK7 = log2(CK7)) %>% 
+                                 filter(log2.CK7 > 10.5)
+```
 
-colnames(core10mask)[2] <- "Cellid"
-colnames(core10mask)[3] <- "proba_0"
 
-core10mask$proba_0[which(core10mask$proba_0  == 0)]  <- 0.00001
 
-core10mask$proba_0 <-  core10mask$proba_0 + 1
+```{r}
+core58.cancer$MHCII.bin <- ifelse(log2(core58.cancer$MHCII) >= 11.5, "MHCII.high","MHCII.low")
 
-core10mask$Cellid <- as.numeric(core10mask$Cellid)
-write.table(core10mask, 
-            file="D:/users/fperez/NKI_TMAs_AF/TMA_18_810/Spatial-cell-counts_radious46px_core10_for_napari.csv",
+
+core58mask <- neighbors2 %>% filter(slide=="TMA_34_504", core=="core29") %>%
+               mutate(Core_Names=paste0(core,"_Probabilities_cytomask2")) %>%
+               mutate(Immune= CD11c.MY + CD15.MY + CD163.MP + CD207.MY + CD31.stromal + CD4.T.cells +  CD68.MP + CD8.T.cells + Other.MY + T.regs + B.cells) %>%
+               select(Core_Names, cellid, Immune) %>%
+               filter(!is.na(Immune))
+
+core58mask <- merge(core58mask, core58.cancer, by.x="row.names", by.y="Row.name")
+core58mask <- core58mask[,-1]
+
+core58mask$MHCII <- log2(core58mask$MHCII)
+max.cut <- quantile(core58mask$MHCII, 0.99)
+core58mask$MHCII[core58mask$MHCII >= max.cut] = max.cut
+
+#core58mask <- core58mask %>% select(Core_Names, cellid, MHCII)
+core58mask <- core58mask %>% select(Core_Names, cellid, MHCII.bin)
+
+colnames(core58mask)[2] <- "Cellid"
+#colnames(core58mask)[3] <- "MHCII_mask"
+colnames(core58mask)[3] <- "GlobalCellType"
+
+#core58mask$Immune_prox[which(core58mask$Immune_prox  == 0)]  <- 0.00001
+#core58mask$Immune_prox <-  core58mask$Immune_prox + 1
+
+core58mask$Cellid <- as.numeric(core58mask$Cellid)
+write.table(core58mask,
+            file="D:/users/fperez/NKI_TMAs_AF/TMA_34_504/Cancer_MHCIIbin_core29_for_napari.csv",
             row.names=FALSE, sep=",")
 ```
+
 
 
 #Reading the tables with immune cell neighboors of MHCII+ cancer cells
@@ -179,40 +226,82 @@ MHCIIneg.cancer.neighboors <- read.table(file=file2, sep=",", header=TRUE)
 colnames(neighbors.counts)[1] <- "CellID.long"
 cells.data <- cbind(cells.labels, neighbors.counts)
 
-
-#Selecting only cancer cells
-cancer.cells <- cells.data[cells.data$GlobalCellType == "Cancer",]
+cells.dat <- merge(cells.data, M.profiles.clin, by=c("cycif.slide", "cycif.core.id"))
+cells.dat
 ```
 
-
-
-
-#Merging cancer.cell with molecular profile information and stratifiying by MHCII expression
+#Calculating MHCII proportion of cells.dat
 ```{r}
-cancers.dat <- merge(cancer.cells, M.profiles.clin, by=c("cycif.slide", "cycif.core.id"))
-cancers.dat
+p.mhcii <- cells.dat %>% 
+                group_by(patient) %>% 
+                    mutate(lower_bound= quantile(log2(MHCII), 0.01),
+                           upper_bound= quantile(log2(MHCII), 0.99),
+                           MHCII_capped= pmin(pmax(log2(MHCII), lower_bound), upper_bound),
+                           # Apply Min-Max scaling
+                           MHCII_scaled = (MHCII_capped - lower_bound) / (upper_bound - lower_bound),
+                           MHCII.bin=ifelse(MHCII_scaled > 0.5, "MHCII.high","MHCII.low")) %>% 
+                    as.data.frame() %>% 
+                    pull(MHCII.bin)
+
+
+p.mhci <- cells.dat %>% 
+                group_by(patient) %>% 
+                    mutate(lower_bound= quantile(log2(MHCI), 0.01),
+                           upper_bound= quantile(log2(MHCI), 0.99),
+                           MHCI_capped= pmin(pmax(log2(MHCI), lower_bound), upper_bound),
+                           # Apply Min-Max scaling
+                           MHCI_scaled = (MHCI_capped - lower_bound) / (upper_bound - lower_bound),
+                           MHCI.bin=ifelse(MHCI_scaled > 0.5, "MHCI.high","MHCI.low")) %>% 
+                    as.data.frame() %>% 
+                    pull(MHCI.bin)
+
+p.STAT1 <- cells.dat %>% 
+                group_by(cycif.slide) %>% 
+                    mutate(lower_bound= quantile(log2(pSTAT1), 0.01),
+                           upper_bound= quantile(log2(pSTAT1), 0.99),
+                           pSTAT1_capped= pmin(pmax(log2(pSTAT1), lower_bound), upper_bound),
+                           # Apply Min-Max scaling
+                           pSTAT1_scaled = (pSTAT1_capped - lower_bound) / (upper_bound - lower_bound),
+                           pSTAT1.bin=ifelse(pSTAT1_scaled > 0.5, "pSTAT1.high","pSTAT1.low")) %>% 
+                    as.data.frame() %>% 
+                    pull(pSTAT1.bin)
+
+cells.dat$MHCII.bin <- p.mhcii
+cells.dat$MHCI.bin <- p.mhci
+cells.dat$pSTAT1.bin <- p.STAT1
 ```
+
+
+
+```{r}
+#Selecting only cancer cells
+cancers.dat <- cells.dat[cells.dat$GlobalCellType == "Cancer",]
+```
+
 
 #Defining function to calculate Fold.changes in proportion of neighboors
 ```{r}
 #The input should have a column for each cell.type neighboor of interest
-get.fold.changes <- function(input.dat, cells.interest, comparison.name="All.cells"){
+get.fold.changes <- function(input.dat, cells.interest, comparison.name="All.cells", col.strat="MHCII"){
+      high.val <- paste0(col.strat,".high")
+      low.val <- paste0(col.strat,".low")
+      col.interest <- paste0(col.strat, ".bin")
       fold.changes <- sapply(cells.interest, function(x){
         df <- input.dat[!is.na(input.dat[,x]),]
-        fold.change <- mean(df[df$MHCII.bin=="MHCII.high",x]) /
-                                  mean(df[df$MHCII.bin=="MHCII.low",x])
+        fold.change <- mean(df %>% filter(!!rlang::sym(col.interest) == high.val) %>% pull(x)) /
+                                  mean(df %>% filter(!!rlang::sym(col.interest) == low.val) %>% pull(x))
         #fold.change <- fold.change -1
         
-        utest <- wilcox.test(df[df$MHCII.bin=="MHCII.high",x],
-                                  df[df$MHCII.bin=="MHCII.low",x])
+        utest <- wilcox.test(df %>% filter(!!rlang::sym(col.interest) == high.val) %>% pull(x),
+                                  df %>% filter(!!rlang::sym(col.interest) == low.val) %>% pull(x))
         pval1 <- utest$p.value
         return(c(fold.change, pval1))
       })
-      counts <- table(input.dat$MHCII.bin)
+      counts <- table(input.dat[,col.interest])
       fold.changes <- as.data.frame(t(fold.changes))
       fold.changes <- rownames_to_column(fold.changes)
       colnames(fold.changes) <- c("Neighbors","Fold.chage","Pval")
-      fold.changes$MHCII.high.prop = round(counts[1]/(counts[2] + counts[1]),2)
+      fold.changes$High.prop = round(counts[1]/(counts[2] + counts[1]),2)
       fold.changes$class = comparison.name
       return(fold.changes)
 }
@@ -228,8 +317,12 @@ neighbors.interest <- c("CD8.T.cells","CD4.T.cells","T.regs", "B.cells" ,"CD11c.
                         "CD68.MP","CD163.MP","CD15.MY", "CD31.stromal", "Stromal")
 
 #Stratifying by MHCII and Ki67
-cancers.dat <- cancers.dat %>% mutate(MHCII.bin = ifelse(MHCII > (median(MHCII) + sd(MHCII)),"MHCII.high","MHCII.low"),
-                                  Ki67.bin = ifelse(Ki67 > (median(Ki67)+ sd(Ki67)),"Ki67.high","Ki67.low"))
+#The median value + SD of MHCII looks in tCycif images as a good gating point
+# cancers.dat <- cancers.dat %>% 
+#                     group_by(cycif.slide) %>% 
+#                     mutate(MHCII.bin = ifelse(MHCII > (median(MHCII) + sd(MHCII)),"MHCII.high","MHCII.low"),
+#                                   Ki67.bin = ifelse(Ki67 > (median(Ki67)+ sd(Ki67)),"Ki67.high","Ki67.low"),
+#                                   MHCI.bin = ifelse(MHCI > (median(MHCI) + 0.2 * sd(MHCI)),"MHCI.high","MHCI.low"))
 
 fold.neighbors <- NULL
 for (t in therapies){
@@ -254,7 +347,6 @@ fold.neighbors <- fold.neighbors %>% filter(class != "Other")
 ```
 
 
-
 ```{r}
 order.m.profiles=c("BRCAloss","HRD","HRP","CCNE1amp")
 
@@ -266,9 +358,9 @@ for (t in therapies){
   df.set <- fold.neighbors %>% filter(therapy=={t},
                                       FDR < 0.05)
   
-  a <- df.set %>% select(class, MHCII.high.prop) %>%
+  a <- df.set %>% select(class, High.prop) %>%
                   unique() %>% arrange(factor(class, levels = order.m.profiles)) %>% 
-                  pull(MHCII.high.prop)
+                  pull(High.prop)
 
   ha = HeatmapAnnotation(MHCII = anno_barplot(cbind(a, 1-a), height = unit(1, "cm"),
          gp = gpar(fill = c(8,0), col = c(1,1))))
@@ -287,7 +379,7 @@ for (t in therapies){
                    .default = 1))
   
   p <- ggplot(df.set, aes(x=class, y=Neighbors)) + geom_point(aes(col=log2FC, size=FDR.cat)) + 
-          scale_colour_gradient2(low= "blue", mid="grey90", high ="red", midpoint = 0, limits = c(-1.7,3.15)) +
+          scale_colour_gradient2(low= "blue", mid="grey90", high ="red", midpoint = 0, limits = c(-1,2.3)) +
           #scale_radius(range = c(1,6), limits = c(0.3, 0.8), breaks = c(0.40, 0.50, 0.60, 0.7, 0.8)) +
           scale_radius(range = c(2,6), limits = c(1, 4), breaks = c(1, 2, 3, 4),
                        labels = c("<0.05", "<1^-3", "<1^-6", "<1^-12")) +
@@ -301,10 +393,125 @@ for (t in therapies){
                      legend.position = "right") +
           labs(col='log2(FC)', size='FDR')
   print(p)
-  ggsave(p, filename=paste0(out.folder.name, "Neighboors_MHCIIhighVSlow_FDRdot",t,"_30px.svg"),
+  ggsave(p, filename=paste0(out.folder.name, "NeighboorsN_MHCIIhighVSlow_FDRdot",t,"_30px.svg"),
           height = 4.7, width = 3.7, units = "in")
 }
 ```
+
+#Repeating analysis for all molecular profiles
+```{r}
+cancers.fill <- cancers.dat[!is.na(cancers.dat$therapy_sequence),]
+
+
+mhcii.table <- get.fold.changes(cancers.fill, neighbors.interest, comparison.name="MHCII.diff")
+mhci.table <- get.fold.changes(cancers.fill, neighbors.interest, comparison.name="MHCI.diff", col.strat="MHCI")
+mhci.table
+```
+
+
+```{r}
+fdrs <- p.adjust(c(mhci.table$Pval, mhcii.table$Pval))
+
+df1 <- mhci.table
+df1$log2FC <- log2(df1$Fold.chage)
+df1$FDR <- fdrs[1:nrow(df1)]
+df1 <- df1 %>%  mutate(FDR.cat = case_when(
+                 FDR < 1e-12  ~ 4,
+                 FDR < 1e-6  ~ 3,
+                 FDR < 1e-3  ~ 2,
+                 .default = 1))
+df1 <- df1[df1$FDR < 0.05,]
+
+df1$Neighbors <- factor(df1$Neighbors, levels=intersect(neighbors.interest, df1$Neighbors))
+
+
+p <- ggplot(df1, aes(x=class, y=Neighbors)) + geom_point(aes(col=log2FC, size=FDR.cat)) + 
+          scale_colour_gradient2(low= "blue", mid="grey90", high ="red", midpoint = 0, limits = c(-1,1.7)) +
+          #scale_radius(range = c(1,6), limits = c(0.3, 0.8), breaks = c(0.40, 0.50, 0.60, 0.7, 0.8)) +
+          scale_radius(range = c(2,6), limits = c(1, 4), breaks = c(1, 2, 3, 4),
+                       labels = c("<0.05", "<1^-3", "<1^-6", "<1^-12")) +
+          theme_classic() +
+          theme(axis.text.x=element_text(size=rel(1.1), angle = 45, vjust = 1.01, hjust=1),
+                     axis.text.y=element_text(size=rel(1.1)),
+                     axis.title.x=element_blank(), axis.title.y=element_blank(),
+                     legend.text=element_text(size=rel(1.1)),
+                     legend.title=element_text(size=rel(1.1)),
+                     axis.title=element_text(size=rel(1.1)),
+                     legend.position = "right") +
+          labs(col='log2(FC)', size='FDR')
+print(p)
+ggsave(p, filename=paste0(out.folder.name, "Neighboors_MHCIhighVSlow_FDRdot_30px.svg"),
+        height = 11, width = 7, units = "cm")
+
+
+
+df1 <- mhcii.table
+df1$log2FC <- log2(df1$Fold.chage)
+start.fdr <- nrow(mhci.table) + 1
+df1$FDR <- fdrs[start.fdr:length(fdrs)]
+df1 <- df1 %>%  mutate(FDR.cat = case_when(
+                 FDR < 1e-12  ~ 4,
+                 FDR < 1e-6  ~ 3,
+                 FDR < 1e-3  ~ 2,
+                 .default = 1))
+df1 <- df1[df1$FDR < 0.05,]
+df1$Neighbors <- factor(df1$Neighbors, levels=intersect(neighbors.interest, df1$Neighbors))
+
+
+p <- ggplot(df1, aes(x=class, y=Neighbors)) + geom_point(aes(col=log2FC, size=FDR.cat)) + 
+          scale_colour_gradient2(low= "blue", mid="grey90", high ="red", midpoint = 0, limits = c(-1,1.7)) +
+          #scale_radius(range = c(1,6), limits = c(0.3, 0.8), breaks = c(0.40, 0.50, 0.60, 0.7, 0.8)) +
+          scale_radius(range = c(2,6), limits = c(1, 4), breaks = c(1, 2, 3, 4),
+                       labels = c("<0.05", "<1^-3", "<1^-6", "<1^-12")) +
+          theme_classic() +
+          theme(axis.text.x=element_text(size=rel(1.1), angle = 45, vjust = 1.01, hjust=1),
+                     axis.text.y=element_text(size=rel(1.1)),
+                     axis.title.x=element_blank(), axis.title.y=element_blank(),
+                     legend.text=element_text(size=rel(1.1)),
+                     legend.title=element_text(size=rel(1.1)),
+                     axis.title=element_text(size=rel(1.1)),
+                     legend.position = "right") +
+          labs(col='log2(FC)', size='FDR')
+print(p)
+ggsave(p, filename=paste0(out.folder.name, "Neighboors_MHCIIhighVSlow_FDRdot_30px.svg"),
+        height = 11, width = 7, units = "cm")
+```
+
+```{r}
+can.set <- cancers.dat %>% filter(MHCII.bin == "MHCII.high" | MHCI.bin == "MHCI.high") %>% 
+          mutate(MHC.status=paste0(MHCII.bin,"_",MHCI.bin)) %>% 
+          select(any_of(c("cycif.slide","cycif.core.id","MHC.status",neighbors.interest))) %>% 
+          filter(!MHC.status == "MHCII.high_MHCI.high") 
+
+can.set[is.na(can.set)] <- 0 
+
+melted.set <- melt(can.set)
+
+melted.set %>% group_by(MHC.status, variable) %>% 
+               summarise(Mean.abundance = mean(value)) %>% 
+               as.data.frame() %>% 
+               pivot_wider(names_from = MHC.status, values_from = Mean.abundance) %>% 
+               mutate(Difference = MHCII.low_MHCI.high - MHCII.high_MHCI.low)
+
+
+my_comparisons <- list(c("MHCII.high_MHCI.high", "MHCII.high_MHCI.low"),
+                       c("MHCII.high_MHCI.high", "MHCII.low_MHCI.high"),
+                       c("MHCII.low_MHCI.high", "MHCII.high_MHCI.low"))
+
+df <- melted.set[melted.set$variable == "CD8.T.cells",]
+df$value <- log(df$value + 0.1)
+
+p2 <- ggboxplot(df, x="MHC.status", y="value", add.params=list(fill=NA, width=0.3),
+          color="MHC.status") +
+         stat_compare_means(comparisons = my_comparisons, label="p.signif") + 
+         ylab("Proportion of neighbors") +
+         xlab("") +
+         facet_wrap(~variable)
+print(p2)
+```
+
+
+
 
 #Getting patients IDs, of patient's with above 5% of cancer cells
 ```{r}
@@ -338,28 +545,24 @@ write.table(cancer.prop.by.core,
 ```
 
 
+
 #Calculating proportion of MHCII+ cancer cells per patient
 ```{r}
-therapies <- c("PDS","IDS")
-
-#Calculating median and sd of MHCII in cancer cells
-MHCII.med.value <- median(log2(cancers.dat$MHCII))
-MHCII.sd.value <- sd(log2(cancers.dat$MHCII))
-
 #Get the proportion of cancer cells per core, with MHCII expression above the med+sd
-MHCII.prop.cores <- NULL
-for (t in therapies){
-  sel.df <- cancers.dat %>%  filter(therapy_sequence2 == {t})
-  MHCII.prop.core <- sel.df %>% group_by(cycif.slide, cycif.core.id) %>%  
-                      summarise(Prop.pos=sum(log2(MHCII) > (MHCII.med.value + MHCII.sd.value))/n()) 
-  MHCII.prop.cores <- rbind(MHCII.prop.cores, MHCII.prop.core)
-}
+MHCII.prop.cores <- cancers.dat %>% group_by(cycif.slide, cycif.core.id) %>%  
+                    summarise(total=n(),
+                              mhcii_high_count = sum(MHCII.bin == "MHCII.high")) %>% 
+                    mutate(Prop.pos = mhcii_high_count/ total) %>% 
+                    select(-total, -mhcii_high_count)
+
+
 
 #Merging with patients Ids and clinical info
 MHCII.cores.prop.clin <- merge(MHCII.prop.cores, M.profiles.clin, by=c("cycif.slide", "cycif.core.id"))
 
 #Select only patients with at least 2 cores
-MHCII.cores.prop.clin <- MHCII.cores.prop.clin %>% group_by(patient) %>% mutate(N.cores=n()) %>% filter(N.cores >= 1)
+MHCII.cores.prop.clin <- MHCII.cores.prop.clin %>% group_by(patient) %>%
+                                                    mutate(N.cores=n()) %>% filter(N.cores >= 2)
 
 #Get median proportion by patient's cores
 MHCII.prop.patient <- MHCII.cores.prop.clin %>% group_by(patient) %>% summarise(Med.prop = median(Prop.pos))
@@ -372,8 +575,151 @@ MHCII.prop.patient.clin <- merge(MHCII.prop.patient, M.profiles.clin.patient)
 MHCII.prop.patient.clin <- MHCII.prop.patient.clin[MHCII.prop.patient.clin$patient %in% high.cancer.prop.patients,]
 
 
-MHCII.cores.prop.clin %>% filter(cycif.slide=="TMA_43_616") %>% arrange(desc(Prop.pos))
+MHCII.cores.prop.clin %>% arrange(desc(Prop.pos))
 ```
+
+
+
+
+#Calculating proportion of MHCI+ cancer cells per patient
+```{r}
+#Get the proportion of cancer cells per core, with MHCII expression above the med+sd
+MHCI.prop.cores <- cancers.dat %>% group_by(cycif.slide, cycif.core.id) %>%  
+                    summarise(total=n(),
+                              pSTAT1_high_count = sum(pSTAT1.bin == "pSTAT1.high")) %>% 
+                    mutate(Prop.pos = pSTAT1_high_count/ total) %>% 
+                    select(-total, -pSTAT1_high_count)
+
+#Merging with patients Ids and clinical info
+MHCI.cores.prop.clin <- merge(MHCI.prop.cores, M.profiles.clin, by=c("cycif.slide", "cycif.core.id"))
+
+#Select only patients with at least 2 cores
+MHCI.cores.prop.clin <- MHCI.cores.prop.clin %>% group_by(patient) %>%
+                                                    mutate(N.cores=n()) %>% filter(N.cores >= 2)
+
+#Get median proportion by patient's cores
+MHCI.prop.patient <- MHCI.cores.prop.clin %>% group_by(patient) %>% summarise(Med.prop = median(Prop.pos))
+
+#Merge with clinical info
+M.profiles.clin.patient <- M.profiles.clin %>% select(-cycif.slide, -cycif.core.id, -therapy_sequence) %>% unique()
+MHCI.prop.patient.clin <- merge(MHCI.prop.patient, M.profiles.clin.patient)
+
+#Select only patients with at least 5% of cancer cells in all samples 
+MHCI.prop.patient.clin <- MHCI.prop.patient.clin[MHCI.prop.patient.clin$patient %in% high.cancer.prop.patients,]
+
+
+MHCI.cores.prop.clin %>% filter(cycif.slide=="TMA_43_616") %>% arrange(desc(Prop.pos))
+```
+
+
+
+
+
+
+
+
+
+```{r}
+core.cell.prop <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/01_Survival_Proportions_November_medians/Proportions_by_core.csv", sep=",", header = TRUE)
+
+core.cell.prop$GlobalCellType[core.cell.prop$GlobalCellType == "CD8.effector.T.cells"] <- "CD8.T.cells"
+core.cell.prop$GlobalCellType[core.cell.prop$GlobalCellType == "CD8.CD45RO.T.cells"] <- "CD8.T.cells"
+core.cell.prop$GlobalCellType[core.cell.prop$GlobalCellType == "CD8.PD1.T.cells"] <- "CD8.T.cells"
+core.cell.prop$GlobalCellType[core.cell.prop$GlobalCellType == "CD4.CD45RO.T.cells"] <- "CD4.T.cells"
+core.cell.prop$GlobalCellType[core.cell.prop$GlobalCellType == "CD4.PD1.T.cells"] <- "CD4.T.cells"
+
+
+#The median by patient is taken from the proportions for each core
+patient.cell.prop <- core.cell.prop %>% group_by(patient, GlobalCellType) %>% 
+                      summarise(Proportion = median(Proportion)) %>% as.data.frame() %>%
+                      pivot_wider(names_from = GlobalCellType, values_from = Proportion)
+patient.cell.prop[is.na(patient.cell.prop)] <- 0 
+patient.cell.prop
+```
+
+
+
+#Calculating by patient/sample the association of MHCII with Immune cell abundance
+```{r}
+MHCII.cell.prop <- merge(MHCII.prop.patient.clin, patient.cell.prop, by="patient")
+MHCII.cell.prop <- MHCII.cell.prop %>% mutate(MHCII.strat= ntile(MHCII.cell.prop$Med.prop,3)) %>% 
+                    mutate(MHCII.stat = case_when(
+                      MHCII.strat == 1 ~ "Low",
+                      MHCII.strat == 2 ~ "Mid",
+                      MHCII.strat == 3 ~ "High",
+                    ))
+
+MHCII.cell.prop$MHCII.stat <- factor(MHCII.cell.prop$MHCII.stat, levels=c("Low","Mid","High"))
+my_comparisons <- list( c("Low", "Mid"), c("Mid", "High"), c("Low", "High") )
+
+#Plots for the cells with higher abundance
+cells.interest <- c("CD11c.MY", "CD163.MP", "CD68.MP")
+MHCII.sel.cells <- MHCII.cell.prop %>% select(patient, MHCII.stat, therapy_sequence2, any_of(cells.interest))
+df <- melt(MHCII.sel.cells)
+colnames(df)[4] <- "Cell.type"
+
+p <- ggboxplot(df, x = "MHCII.stat", y = "value") + facet_wrap(~Cell.type) +
+  theme_bw() + xlab("HLA_DPB1 expression") +
+  theme(axis.title = element_text(size=rel(1.2)),
+        axis.text = element_text(size=rel(1.2)),
+        strip.text = element_text(size=rel(1.15))) + 
+  stat_compare_means(comparisons = my_comparisons, 
+                     symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols=c("****", "***", "**", "*", "ns"))) +
+  ylim(0,0.32) + xlab("Prop. MHCII+ positives CCs") +
+  ylab("tCycif cell type propotions")
+print(p)
+
+ggsave(p,
+       file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions1_MHCII_cancer.png",
+       width = 13, height = 8, units = "cm")
+ggsave(p,
+       file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions1_MHCII_cancer.svg",
+       width = 13, height = 8, units = "cm")
+
+
+
+#Plots for the cells with lowe  abundance
+cells.interest <- c("CD207.MY", "CD15.MY", "CD4.T.cells", "T.regs", "CD8.T.cells")
+MHCII.sel.cells <- MHCII.cell.prop %>% select(patient, MHCII.stat, therapy_sequence2, any_of(cells.interest))
+df <- melt(MHCII.sel.cells)
+colnames(df)[4] <- "Cell.type"
+
+p <- ggboxplot(df, x = "MHCII.stat", y = "value") + facet_wrap(~Cell.type) +
+  theme_bw() + xlab("HLA_DPB1 expression") +
+  theme(axis.title = element_text(size=rel(1.2)),
+        axis.text = element_text(size=rel(1.2)),
+        strip.text = element_text(size=rel(1.15))) + 
+  stat_compare_means(comparisons = my_comparisons, 
+                     symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols=c("****", "***", "**", "*", "ns"))) +
+  ylim(0,0.1) + xlab("Prop. MHCII+ positives CCs") +
+  ylab("tCycif cell type propotions")
+print(p)
+
+ggsave(p,
+       file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions2_MHCII_cancer.png",
+       width = 13, height = 14, units = "cm")
+ggsave(p,
+       file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions2_MHCII_cancer.svg",
+       width = 13, height = 14, units = "cm")
+
+
+#To add p-values to the last plots
+p <- ggboxplot(df, x = "MHCII.stat", y = "value") + facet_wrap(~Cell.type) +
+  theme_bw() + xlab("HLA_DPB1 expression") +
+  theme(axis.title = element_text(size=rel(1.2)),
+        axis.text = element_text(size=rel(1.2)),
+        strip.text = element_text(size=rel(1.15))) + 
+  stat_compare_means(comparisons = my_comparisons, 
+                     symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols=c("****", "***", "**", "*", "ns"))) +
+  xlab("Prop. MHCII+ positives CCs") + ylim(0,0.4) +
+  ylab("tCycif cell type propotions")
+ggsave(p,
+       file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions21_MHCII_cancer.svg",
+       width = 13, height = 14, units = "cm")
+```
+
+
+
 
 ###Inspecting the proportion by patient
 ```{r}
@@ -392,8 +738,10 @@ ggsave(p, filename=paste0(out.folder.name, "Boxplot_MHCIIprop_growthpattern.png"
 
 #Survival analysis using MHCII+ proportion
 ```{r}
+therapies <- c("PDS","IDS")
+
 formulas.cox <- c('Surv(timelastfu, finalstatus) ~ MHCII.strat + Age + Stage + Molecular.profile + Therapy.sequence',
-            'Surv(daystoprogression, progression)~ MHCII.strat + Stage + Molecular.profile + Therapy.sequence')
+            'Surv(daystoprogression, progression)~ MHCII.strat + Age + Stage + Molecular.profile + Therapy.sequence')
 
 formulas.names <- c("OS","PFI")
 formulas.labs <- c("OS probability","PFI probability")
@@ -409,15 +757,18 @@ for (i in 1:length(formulas.cox)){
     #Cox model 
     cox.model <- coxph(as.formula(formulas.cox[i]), data=df)
     p1 <- ggforest(cox.model, data = df, main=paste0(formulas.labs[i]," ALL"))
+    print(p1)
     ggsave(p1, file=paste0(out.folder.name, "Cox_MHCII_ALL_", formulas.names[i],".svg"),
          width = 14, height = 11, units = "cm")
+    ggsave(p1, file=paste0(out.folder.name, "Cox_MHCII_ALL_", formulas.names[i],".png"),
+     width = 14, height = 11, units = "cm")
 }
 
 ##Selecting others and creating a model for PDS and a model for IDS
 #Stratification of samples individually for PDS and IDS
 
-formulas.cox <- c('Surv(timelastfu, finalstatus) ~  MHCII.strat + Age + Stage + resdx',
-              'Surv(daystoprogression, progression)~ MHCII.strat +  Stage + resdx')
+formulas.cox <- c('Surv(timelastfu, finalstatus) ~  MHCII.strat + Age + Stage + Molecular.profile',
+              'Surv(daystoprogression, progression)~ MHCII.strat +  Stage + Molecular.profile')
 
 formulas.kapplan <- c('Surv(timelastfu, finalstatus) ~  MHCII.bin',
               'Surv(daystoprogression, progression)~ MHCII.bin')
@@ -426,11 +777,13 @@ formulas.names <- c("OS","PFI")
 formulas.labs <- c("OS probability","PFI probability")
 
 for (t in therapies){
-  df <- MHCII.prop.patient.clin %>% filter(therapy_sequence2 == {t})
+  df <- MHCII.prop.patient.clin
   
   #Stratification in ntiles for cox models
   df$MHCII.strat <- ntile(df$Med.prop,3)
-
+  
+  df <- df %>% filter(therapy_sequence2 == {t})
+  
   #Stratification in two groups for KM
   df$MHCII.bin <- ifelse(df$Med.prop > median(df$Med.prop),1,0)
 
@@ -440,7 +793,9 @@ for (t in therapies){
      cox.model <- coxph(as.formula(formulas.cox[i]), data=df)
      p1 <- ggforest(cox.model, data = df, main=paste0(formulas.labs[i]," ", t))
      print(p1)
-     ggsave(p1, file=paste0(out.folder.name, "Cox_MHCII_others",t, "_", formulas.names[i],".png"),
+     ggsave(p1, file=paste0(out.folder.name, "Cox_MHCII_",t, "_", formulas.names[i],".png"),
+           width = 14, height = 7, units = "cm")
+     ggsave(p1, file=paste0(out.folder.name, "Cox_MHCII_",t, "_", formulas.names[i],".svg"),
            width = 14, height = 7, units = "cm")
      
      #Kapplan-Meir
@@ -460,22 +815,24 @@ for (t in therapies){
      plot.to.save <- list(p$plot, p$table)
      ggsave(file=paste0(out.folder.name,"Kapplan_MHCII_",t, "_", formulas.names[i],".png"),
            arrangeGrob(grobs = plot.to.save, ncol = 1),
-         width = 13, height = 16, units = "cm")
+         width = 13, height = 19, units = "cm")
   }
 }
 
 ##Selecting others and stratification by therapy, creating a model for PDS and a model for IDS
 formulas.cox <- c('Surv(timelastfu, finalstatus) ~ MHCII.strat + Age + Stage + therapy_sequence2',
-            'Surv(daystoprogression, progression)~ MHCII.strat + Stage + therapy_sequence2')
+            'Surv(daystoprogression, progression)~ MHCII.strat + Age + Stage + therapy_sequence2')
 
-df <- MHCII.prop.patient.clin %>% filter(Molecular.profile2=="Other")
+df <- MHCII.prop.patient.clin %>% filter(Molecular.profile2=="CCNE1amp" |
+                                         Molecular.profile2=="HRP")
 df$MHCII.strat <- ntile(df$Med.prop,3)
 
 for (i in 1:length(formulas.cox)){
   #Cox model 
   cox.model <- coxph(as.formula(formulas.cox[i]), data=df)
-  p1 <- ggforest(cox.model, data = df, main=paste0(formulas.labs[i]," ALL"))
-  ggsave(p1, file=paste0(out.folder.name, "Cox_MHCII_others_", formulas.names[i],".png"),
+  p1 <- ggforest(cox.model, data = df, main=paste0(formulas.labs[i]," HRPs"))
+  print(p1)
+  ggsave(p1, file=paste0(out.folder.name, "Cox_MHCII_HRPs_", formulas.names[i],".png"),
        width = 14, height = 11, units = "cm")
 }
 ```
@@ -613,7 +970,7 @@ outlier.trim <- function(signal.data, max.quantile=0.999, min.quantile=0.001){
 cells.interest <- c("CD8.T.cells", "CD4.T.cells", "T.regs", "B.cells", "CD11c.MY",
                    "CD207.MY", "CD163.MP", "CD68.MP", "CD15.MY", "Other.MY")
 
-selected.markers <- c("Ki67", "pSTAT1", "pTBK1",  "TIM3", "PD1",  "MHCII")
+selected.markers <- c("Ki67", "pSTAT1", "pTBK1",  "TIM3", "PD1",  "MHCII","GranzymeB")
 
 for (marker in selected.markers){
   fold.neighbors <- NULL
@@ -624,7 +981,10 @@ for (marker in selected.markers){
       #Log2 of markers, outliear value trimming and scaling by slide
       cols <- which(colnames(sel.dat) =='DNA1'):c(which(colnames(sel.dat) =='Area') - 1)
       sel.dat[,cols] <- log2(sel.dat[,cols])
-      sel.dat[,cols] <- outlier.trim(sel.dat[,cols])
+      for (slide in unique(sel.dat$cycif.slide)){
+         slide.rows <- which(sel.dat$cycif.slide %in% slide)
+         sel.dat[slide.rows,cols] <- outlier.trim(sel.dat[slide.rows,cols], max.quantile=0.99, min.quantile=0.01)
+      }
       sel.dat <- sel.dat %>%
                 group_by(cycif.slide) %>%
                 mutate(across(where(is.numeric), ~ as.numeric(normalize(.)))) %>%
@@ -683,22 +1043,46 @@ for (marker in selected.markers){
 ```
 
 
-
+#Making violin plots to compare the expression of relevant markers in neighboors of MHCII+ cancer cells
 ```{r}
-df.sel <- Cancer.neighbors.clin[Cancer.neighbors.clin$Molecular.profile2 == "BRCAloss",]
+cols <- c("pSTAT1")
+cell.types <- c("CD11c.MY","CD8.T.cells","T.regs", "CD4.T.cells")
 
+df <- Cancer.neighbors.clin #%>% filter(therapy_sequence2 == {t})
 
-vars <- c("Ki67","PD1", "PDL1_488", "pSTAT1", "GranzymeB")
-for (t in c("PDS","IDS")){
-  df <- df.sel[which(df.sel$therapy_sequence2 == t),]
-  for (v in vars){
-    aux <- df
-    aux[,v] <- log2(aux[,v])
-    p <- ggplot(aux, aes_string(x="GlobalCellType", y=v, fill="Cancer.neighbor")) +
-              geom_boxplot(aes(fill=Cancer.neighbor)) + theme_bw() +
-               labs(title=paste0(t,"_", v))
-    print(p)
-  }
+df[,cols] <- log2(df[,cols])
+
+for (slide in unique(df$cycif.slide)){
+    slide.df <- df %>% filter(cycif.slide == slide) %>%
+                  select(all_of(cols))
+    slide.rows <- which(df$cycif.slide %in% slide)
+    df[slide.rows,cols] <- outlier.trim(slide.df, max.quantile=0.99, min.quantile=0.01)
+    rm(slide.df)
 }
+
+df <- df %>% filter(GlobalCellType %in% cell.types) %>%
+            select(all_of(c("CellId","cycif.slide","GlobalCellType",
+                             "therapy_sequence2","Cancer.neighbor", cols))) %>%
+               group_by(cycif.slide) %>%
+               mutate(across(where(is.numeric), ~ as.numeric(scale(.)))) %>%
+               as.data.frame()
+
+melted.df <- melt(df)
+
+melted.df$GlobalCellType <- factor(melted.df$GlobalCellType, levels=cell.types)
+
+my_comparisons <-  list(c("MHCII.pos", "MHCII.neg"))
+p <- ggviolin(melted.df, x="Cancer.neighbor", y="value", fill="Cancer.neighbor",
+              palette = c("#FC4E07", "#00AFBB")) +
+              geom_boxplot(outlier.shape = NA, width=0.3) + ylim(-2.5,5) +
+              stat_compare_means(comparisons = my_comparisons, label = "p.signif", label.y = 4.5) +
+              theme_bw() + geom_hline(yintercept=0, lty=3, col="grey") +
+              theme(axis.text.x = element_blank()) +
+              facet_wrap(~GlobalCellType, nrow =1)
+      
+           
+print(p)
+ggsave(p, filename=paste0(out.folder.name,"/Violin_plots_pSTAT1_MHCII_neighboors.svg"), width = 13,
+       height = 8, units = "cm")
 ```
 
