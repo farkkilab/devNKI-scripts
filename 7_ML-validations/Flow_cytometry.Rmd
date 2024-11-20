@@ -1,0 +1,304 @@
+---
+title: "Flow data"
+output: html_notebook
+---
+
+# Loading libraries
+
+
+```{r}
+library(readxl)
+library(data.table)
+library(dplyr)
+library(tibble)
+library(reshape2)
+library(ComplexHeatmap)
+library(circlize)
+library(ggplot2)
+library(ggpubr)
+library(plyr)
+library(mclust)
+library(FlowSOM)
+library(flowWorkspace)
+```
+
+# Defining input folders and variables of markers
+
+```{r}
+# files_dir - directory which contain flojo files
+# flojo file naming: d0_SX.csv, dX_control_SX.csv, dX_treatmentX_SX.csv 
+# (important: d as first character and _ before treatment name and _ before sample name)
+# flojo filenames have to be the same as in cyto file 'sample' column
+
+files_dir <- 'P:/h345/afarkkilab/Projects/Sciset/iPDC_functional_validation/'
+gated_dir <- 'P:/h345/afarkkilab/Projects/Sciset/iPDC_functional_validation/CYTO_CD8_GrzB_gated/'
+output_dir <- 'P:/h345/afarkkilab/Projects/Sciset/iPDC_d0_annotations_Fernando/'
+
+#Suffix for d0 cancer cell files
+d0_cancer_prefix="d0_cancer_"
+d0_immune_prefix="d0_immune_"
+
+
+# list of cell markers and functional markers - have to be the same as columns in flojo files
+# list of treatments
+# put here only the ones you're interested in. the rest will be ignored
+cell_markers <- c("CD45", "CD8", "CD11c", "CD3", "CD56", "CD14", "CD4")
+functional_markers <- c("GrzB", "IFNg", "Ki67") # "HLA-Dr"
+
+##Gating threshold
+gating_thr <- 130
+```
+
+# Reading input folders per file
+
+```{r}
+gating <- 'no' # 'no', 'manual', 'thr'
+all_dirs <- list.dirs(files_dir, full.names = TRUE)
+all_sample_names <- list.dirs(files_dir, full.names = FALSE)
+all_sample_names <- all_sample_names[grepl('S', all_sample_names)] #rm empty dir
+
+#Exclude the sample S460_iOme because the d0 is not available
+all_sample_names <- all_sample_names[which(all_sample_names != "S460_iOme")]
+```
+
+# Defining relevant functions
+
+```{r}
+annotate.T.cells <- function(input.matrix, markers=c("CD3.cap","CD8.cap"), labels=c("CD3-","CD8+CD3+", "CD3+CD8-"),
+                             number.of.gaussians=3, output.sel="none", sample.sel="none"){
+
+  mod1 <- Mclust(input.matrix, G = number.of.gaussians, modelName = c("VVV","VVI","VEI"))
+  summaryMclust <- summary(mod1, parameters = TRUE)
+
+  #The CD3.negatives
+  neg.cluster <- which.min(summaryMclust$mean[markers[1],])
+  
+  #The CD8+CD3+
+  cd8.cluster <- which.max(summaryMclust$mean[markers[2],])
+  
+  #The CD3+CD8-
+  cd3.cluster <- c(1:3)[which(!1:3 %in% c(neg.cluster, cd8.cluster))]
+  
+  annotations <- cbind(input.matrix, mod1$classification)
+  colnames(annotations)[3] <- "prev.annotation"
+  annotations <- as.data.frame(annotations)
+  stats.clusters <- annotations %>% dplyr::group_by(prev.annotation) %>% 
+                  dplyr::summarise(median.CD3=median(CD3.cap),
+                                   sd.CD3=sd(CD3.cap),
+                                   median.CD8=median(CD8.cap),
+                                   sd.CD8=sd(CD8.cap))
+  
+  min.stats <- stats.clusters %>% dplyr::filter(prev.annotation==neg.cluster)
+  
+  cut.criteria <- annotations %>% 
+                  dplyr::mutate(neg.cd3 = ifelse(CD3.cap <= (min.stats$median.CD3 + 3*min.stats$sd.CD3),
+                                                 "neg.cd3", "pos.cd3"),
+                                neg.cd8 = ifelse(CD8.cap <= (min.stats$median.CD8 + 3*min.stats$sd.CD8),
+                                                 "neg.cd8", "pos.cd8")) 
+  
+  false.positives <- which(cut.criteria$prev.annotation == cd8.cluster &
+                            (cut.criteria$neg.cd3 == "neg.cd3" &
+                            cut.criteria$neg.cd8 == "neg.cd8"))
+  
+  min.stats <- stats.clusters %>% dplyr::filter(prev.annotation==cd3.cluster)
+  
+  cut.criteria <- annotations %>% 
+                  dplyr::mutate(neg.cd8 = ifelse(CD8.cap <= (min.stats$median.CD8 + 3*min.stats$sd.CD8),
+                                                 "neg.cd8", "pos.cd8"))
+  
+  false.positives2 <- which(cut.criteria$prev.annotation == cd8.cluster &
+                            cut.criteria$neg.cd8 == "neg.cd8")
+  
+  
+  mod1$classification[false.positives] = neg.cluster
+  mod1$classification[false.positives2] = cd3.cluster
+  
+  cluster.annotations <- c(neg.cluster, cd8.cluster, cd3.cluster)
+  names(cluster.annotations) <- labels
+  
+  png(paste0(output.sel,"CD8_CD3_gaussians_Mclust_", sample.sel, ".png"),
+      width = 10, height = 10, units = "cm", res = 300)
+  plot(mod1, what = "classification", main="First gate for T.cells")
+  dev.off()
+  
+  #Return classification
+  res = list(classification=summaryMclust$classification,
+             annotations=cluster.annotations)
+  return(res)
+}
+
+#To annotate CD11c using mixture of Gaussians
+annotate.CD11c <- function(input.matrix, markers="CD11c", labels=c("CD11c+CD3-", "CD3-")){
+  number.of.gaussians=2
+  mod1 <- Mclust(input.matrix, G = number.of.gaussians)
+  summaryMclust <- summary(mod1, parameters = TRUE)
+
+  #The CD11c.positives cluster
+  pos.cluster <- which.max(summaryMclust$mean)
+  
+  #Return classification
+  classification=ifelse(summaryMclust$classification == pos.cluster, labels[1], labels[2])
+  return(classification)
+}
+
+#Function to cap outliers
+cap_outliers <- function(x, lower_pct = 0.1, upper_pct = 99.9) {
+  lower_bound <- quantile(x, probs = lower_pct / 100, na.rm = TRUE)
+  upper_bound <- quantile(x, probs = upper_pct / 100, na.rm = TRUE)
+  
+  x_capped <- ifelse(x < lower_bound, lower_bound,
+                     ifelse(x > upper_bound, upper_bound, x))
+  return(x_capped)
+}
+
+
+#Function to annotate the immune cells based on the marker intensities
+annotate.all.immunes <- function(flow.immune, output.folder="none", sample.name="none"){
+   flow.immune <- flow.immune %>% dplyr::mutate(CD3.cap = cap_outliers(CD3),
+                           CD8.cap = cap_outliers(CD8))
+  
+
+
+  ###########Performing first global gating to identify T.cells ################
+  #First a 2d density plot to visually inspect the populations
+  p <- ggplot(flow.immune, aes(x=CD3.cap, y=CD8.cap)) +
+        geom_point() +
+        geom_density_2d_filled(contour_var = "ndensity", alpha = 0.8) +
+        labs(title=sample.name)
+  ggsave(p, filename=paste0(output.folder,"/CD3_CD8_density_", sample.name, ".png"),
+         width = 10, height = 9, units = "cm")
+  
+  #Selecting only the channels of interest and changing format into matrix
+  gate1.matrix <- flow.immune %>% dplyr::select("CD3.cap","CD8.cap") %>% as.matrix()
+  
+  # #Scaling the data
+  # data_FlowSOM <- flowCore::flowFrame(gate1.matrix)
+  # transformList <- flowCore::estimateLogicle(data_FlowSOM, channels = colnames(gate1.matrix))
+  # ff <- flowWorkspace::transform(data_FlowSOM, transformList)
+  # out <- FlowSOM::ReadInput(ff, transform = FALSE, scale = FALSE)
+  # input.matrix <- out$data
+  
+  #Annotating cluster based on mixture of Gaussian
+  immune.cell.annotations.list <- annotate.T.cells(gate1.matrix, output.sel=output.folder, 
+                                                   sample.sel=sample.name)
+  
+  flow.immune$Global.annotation <- immune.cell.annotations.list$classification
+  annotations.labels <- sort(immune.cell.annotations.list$annotations)
+  
+  flow.immune$Global.names <- names(annotations.labels)[flow.immune$Global.annotation]
+  
+  flow.immune <- flow.immune %>% dplyr::select(-Global.annotation)
+  
+  ###########Performing second gating to identify CD11c+ cells ################
+  #Selecting the CD3-
+  non.T.cells <- flow.immune %>% dplyr::filter(Global.names == "CD3-")
+  
+  #Selecting only the channel of interest for CD11c
+  gate2.matrix <- non.T.cells %>% select(CD11c) %>% as.matrix()
+
+  #Annotating cluster based on mixture of Gaussian
+  labels.second.gate <- annotate.CD11c(gate2.matrix)
+  
+  #Exporting annotations
+  flow.immune$Second.annotation <- flow.immune$Global.names
+  flow.immune[flow.immune$Second.annotation == "CD3-","Second.annotation"] = labels.second.gate
+  
+  #Inspecting annotations of CD3+
+  p <- ggplot(flow.immune, aes(x=Second.annotation,y=CD3)) + geom_violin() +
+       theme_bw() + labs(title = sample.name)
+  ggsave(p, filename=paste0(output.folder,"/CD3_violin_", sample.name, ".png"),
+         width = 10, height = 9, units = "cm")
+
+  #Inspecting annotations of CD11c+
+  p <- ggplot(flow.immune, aes(x=Second.annotation,y=CD11c)) + geom_violin() +
+       theme_bw() + labs(title = sample.name)
+  ggsave(p, filename=paste0(output.folder,"/CD11c_violin_", sample.name, ".png"),
+         width = 10, height = 9, units = "cm")
+  annotations.immune <- flow.immune %>% select(Global.names, Second.annotation)
+  
+  return(annotations.immune)
+}
+```
+
+#Performing gating to identify immune cell populations
+
+```{r}
+med.INFg.all <- NULL
+proportions.INFg <- for(sample in all_sample_names){
+  print(paste0("Procesing sample: ", sample))
+  input.cancer <- read.csv(paste0(files_dir, sample, "/",
+                                  d0_cancer_prefix, sample, ".csv"), header = TRUE, sep=",")
+  input.immune <- read.csv(paste0(files_dir, sample, "/",
+                                  d0_immune_prefix, sample, ".csv"), header = TRUE, sep=",")
+
+  #Performing annotation of immune cells according to mixture of gaussians
+  immune.annotations <- annotate.all.immunes(input.immune, output.folder = output_dir, sample.name=sample)
+  input.immune.annotated <- cbind(input.immune, immune.annotations)
+  
+  #Merging immune cell population annotations with the cancer cell flow
+  input.cancer$Global.names <- "Cancer"
+  input.cancer$Second.annotation <- "EpCAM+CD45-"
+  flow.combined <- rbind(input.cancer,  input.immune.annotated)
+  
+  #Calculating proportion of MCHII.high cancer cells among the cancer cells
+  Prop.MHCII.high.cancer <- flow.combined %>%
+                             dplyr::mutate(HLA.DR.group = paste0("g",dplyr::ntile(HLA.Dr, 3))) %>% 
+                             dplyr::filter(Second.annotation=="EpCAM+CD45-") %>% 
+                             dplyr::count(HLA.DR.group) %>% 
+                             dplyr::mutate(Total=sum(n)) %>% 
+                             dplyr::mutate(Prop=n/Total) %>% 
+                             dplyr::filter(HLA.DR.group=="g3") %>%       
+                             dplyr::pull(Prop)
+  
+  #Plotting the expression of HLA.DR among all the cell.types
+  p <- ggplot(flow.combined, aes(x=Second.annotation, y=HLA.Dr)) +
+       geom_violin(fill = NA) + geom_boxplot(width=0.05, outlier.shape = NA) + theme_bw() +
+       labs(title = sample)
+    ggsave(p, filename=paste0(output_dir,"/HLADR_violin_", sample, ".png"),
+           width = 12, height = 9, units = "cm")
+    
+  #Plotting the expression of HLA.DR among all the cell.types
+  p <- ggplot(flow.combined, aes(x=Second.annotation, y=IFNg)) +
+       geom_violin(fill = NA) + geom_boxplot(width=0.05, outlier.shape = NA) + theme_bw() +
+       labs(title = sample)
+    ggsave(p, filename=paste0(output_dir,"/IFNg_violin_", sample, ".png"),
+           width = 12, height = 9, units = "cm")
+    
+  #Plotting the density of HLA.DR among all the cell.types
+  p <- ggplot(flow.combined, aes(HLA.Dr)) +
+       geom_density() + theme_bw() +
+       labs(title = sample)
+    ggsave(p, filename=paste0(output_dir,"/HLADR_density_", sample, ".png"),
+           width = 10, height = 9, units = "cm")
+    
+    #Plotting the density of HLA.DR among all the cell.types
+  p <- ggplot(flow.combined, aes(IFNg)) +
+       geom_density() + theme_bw() +
+       labs(title = sample)
+    ggsave(p, filename=paste0(output_dir,"/IFNg_density_", sample, ".png"),
+           width = 10, height = 9, units = "cm")
+
+  
+  #Calculating median proportion of INF.g per immune cell type
+  #Editing the dataframe to include the name of the sample and the proportion of MHCII.high.cancer
+  #This data.frame is the final out.put to be returned by sapply
+  med.INFg <-  flow.combined %>%
+                             dplyr::group_by(Second.annotation) %>% 
+                             dplyr::summarise(med.INFg=mean(IFNg)) %>% 
+                             dplyr::mutate(Sample=sample) %>% 
+                             dplyr::mutate(Prop.MHCIIhigh.cancer=Prop.MHCII.high.cancer)
+  
+  med.INFg.all <- rbind(med.INFg.all, med.INFg)
+}
+```
+
+```{r}
+pass.samples <- c("S263_pOme", "S345_pOme", "S371_pAdnL",
+                  "S382_iOme", "S388_pOme","S404_iAdn")
+
+pass.INFg <- med.INFg.all %>% dplyr::filter(Sample %in% pass.samples)
+
+p <-  ggplot(pass.INFg, aes(x=Prop.MHCIIhigh.cancer, y=med.INFg)) + geom_point() + theme_bw() +
+      facet_wrap(~Second.annotation)
+print(p)
+```
