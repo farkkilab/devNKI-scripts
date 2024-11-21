@@ -40,6 +40,9 @@ d0_immune_prefix="d0_immune_"
 gate.file <- "P:/h345/afarkkilab/Projects/Sciset/iPDC_d0_annotations_Fernando/Gates_d0_Fernando.csv"
 gate.table <- read.table(file=gate.file, sep=",", header = TRUE)
 
+drug.responses <- read.table(
+            "P:/h345/afarkkilab/Projects/Sciset/iPDC_functional_validation/all_patients_stats_dt.csv",
+           sep=",",header = TRUE)
 ```
 
 # Reading input folders per file
@@ -76,7 +79,7 @@ annotate.CD11c <- function(input.matrix, markers="CD11c", labels=c("CD11c+CD3-",
                    dplyr::summarise(median.cd11c=median(CD11c, na.rm = TRUE),
                                     sd.cd11c=sd(CD11c, na.rm = TRUE))
   false.negatives <- which(annotations$prev.annotation == neg.cluster &
-                            (annotations$CD11c >= (cd11c.median$median.cd11c - 2 * cd11c.median$sd.cd11c)))
+                            (annotations$CD11c >= (cd11c.median$median.cd11c - 1.5 * cd11c.median$sd.cd11c)))
   
   summaryMclust$classification[false.negatives] = pos.cluster
   
@@ -186,65 +189,125 @@ proportions.INFg <- for(sample in all_sample_names){
   input.cancer$Global.names <- "EpCAM+CD45-"
   flow.combined <- rbind(input.cancer,  input.immune)
   
-  #Calculating proportion of MCHII.high cancer cells among the cancer cells
-  Prop.MHCII.high.cancer <- flow.combined %>%
-                             dplyr::mutate(HLA.DR.group = paste0("g",dplyr::ntile(HLA.Dr, 3))) %>% 
-                             dplyr::filter(Global.names=="EpCAM+CD45-") %>% 
-                             dplyr::count(HLA.DR.group) %>% 
-                             dplyr::mutate(Total=sum(n)) %>% 
-                             dplyr::mutate(Prop=n/Total) %>% 
-                             dplyr::filter(HLA.DR.group=="g3") %>%       
-                             dplyr::pull(Prop)
-  
-  #Plotting the expression of HLA.DR among all the cell.types
-  p <- ggplot(flow.combined, aes(x=Global.names, y=HLA.Dr)) +
-       geom_violin(fill = NA) + geom_boxplot(width=0.05, outlier.shape = NA) + theme_bw() +
-       labs(title = sample)
-    ggsave(p, filename=paste0(output_dir,"/HLADR_violin_", sample, ".png"),
-           width = 12, height = 9, units = "cm")
     
-  #Plotting the expression of HLA.DR among all the cell.types
+  #Plotting the expression of IFNg among all the cell.types
   p <- ggplot(flow.combined, aes(x=Global.names, y=IFNg)) +
        geom_violin(fill = NA) + geom_boxplot(width=0.05, outlier.shape = NA) + theme_bw() +
-       labs(title = sample)
+       labs(title = sample) + geom_hline(yintercept = gates.sample$IFNg, lty=3)
     ggsave(p, filename=paste0(output_dir,"/IFNg_violin_", sample, ".png"),
            width = 12, height = 9, units = "cm")
     
+
+    
+    #Plotting the density of IFNg among all the cell.types
+  p <- ggplot(flow.combined, aes(IFNg)) +
+       geom_density() + theme_bw() + geom_vline(xintercept = gates.sample$IFNg, lty=3) +
+       labs(title = sample)
+    ggsave(p, filename=paste0(output_dir,"/IFNg_density_", sample, ".png"),
+           width = 10, height = 9, units = "cm")
+    
+    
+  #Calculating proportion of MCHII.high cancer cells among the cancer cells
+  #The proportion of MHCII cancer cells, is calculated on base of the median HLA.Dr proproportion in CD11c+
+  median.HLA.Dr.CD11c <- input.immune %>% dplyr::filter(Global.names=="CD11c+CD3-") %>% 
+                          summarise(Med.HLA.DR = median(HLA.Dr)) %>% pull()
+  
+  #For some samples was used a gated MHCII, when the median was too low
+  if(!is.na(gates.sample$MHCII)){
+    median.HLA.Dr.CD11c <- gates.sample$MHCII
+  }
+  
+  sd <- flow.combined %>% dplyr::filter(Global.names=="CD11c+CD3-") %>% 
+                          summarise(Med.HLA.DR = sd(HLA.Dr)) %>% pull()
+
+  
+    #Plotting the expression of HLA.DR among all the cell.types
+  p <- ggplot(flow.combined, aes(x=Global.names, y=HLA.Dr)) +
+       geom_violin(fill = NA) + geom_boxplot(width=0.05, outlier.shape = NA) + theme_bw() +
+       labs(title = sample) + geom_hline(yintercept = median.HLA.Dr.CD11c, lty=3)
+    ggsave(p, filename=paste0(output_dir,"/HLADR_violin_", sample, ".png"),
+           width = 12, height = 9, units = "cm")
+  
   #Plotting the density of HLA.DR among all the cell.types
   p <- ggplot(flow.combined, aes(HLA.Dr)) +
-       geom_density() + theme_bw() +
+       geom_density() + theme_bw() + geom_vline(xintercept = median.HLA.Dr.CD11c, lty=3) +
        labs(title = sample)
     ggsave(p, filename=paste0(output_dir,"/HLADR_density_", sample, ".png"),
            width = 10, height = 9, units = "cm")
     
-    #Plotting the density of HLA.DR among all the cell.types
-  p <- ggplot(flow.combined, aes(IFNg)) +
-       geom_density() + theme_bw() +
-       labs(title = sample)
-    ggsave(p, filename=paste0(output_dir,"/IFNg_density_", sample, ".png"),
-           width = 10, height = 9, units = "cm")
+    
+  Prop.MHCII.pos.cancer <- flow.combined %>%
+                             dplyr::filter(Global.names=="EpCAM+CD45-") %>% 
+                             mutate(MHCII.status = ifelse(HLA.Dr >= median.HLA.Dr.CD11c, "HLA.Dr+","HLA.Dr-")) %>% 
+                             dplyr::count(MHCII.status) %>% 
+                             dplyr::mutate(Total=sum(n)) %>% 
+                             dplyr::mutate(Prop=n/Total) %>% 
+                             dplyr::filter(MHCII.status=="HLA.Dr+") %>% 
+                             dplyr::pull(Prop)
 
+  if(length(Prop.MHCII.pos.cancer) == 0){
+    Prop.MHCII.pos.cancer=0
+  }
   
   #Calculating median proportion of INF.g per immune cell type
   #Editing the dataframe to include the name of the sample and the proportion of MHCII.high.cancer
-  #This data.frame is the final out.put to be returned by sapply
-  med.INFg <-  flow.combined %>%
-                             dplyr::group_by(Global.names) %>% 
-                             dplyr::summarise(med.INFg=mean(IFNg)) %>% 
-                             dplyr::mutate(Sample=sample) %>% 
-                             dplyr::mutate(Prop.MHCIIhigh.cancer=Prop.MHCII.high.cancer)
+  #This data.frame is the final out.put per iteration
+  IFNg.pos.by.cell <- flow.combined %>% dplyr::group_by(Global.names) %>%
+                     dplyr::mutate(INFg.status=ifelse(IFNg >= gates.sample$IFNg, "INFg+", "INFg-")) %>%
+                     dplyr::count(INFg.status, .drop = FALSE) %>%
+                     dplyr::mutate(Total=sum(n)) %>%
+                     dplyr::mutate(Prop=n/Total) %>%
+                     dplyr::filter(INFg.status=="INFg+") %>% 
+                     dplyr::select(Global.names, Prop) %>% 
+                     as.data.frame() 
   
-  med.INFg.all <- rbind(med.INFg.all, med.INFg)
+  colnames(IFNg.pos.by.cell)[2] <- "INFg.pos.prop"
+  
+  lacking.pos <- which(!unique(flow.combined$Global.names) %in% IFNg.pos.by.cell$Global.names)
+  if (length(lacking.pos) >1){
+      lacking.cells <- unique(flow.combined$Global.names)[lacking.pos]
+      df <- data.frame(Global.names=lacking.cells, INFg.pos.prop=0)
+      IFNg.pos.by.cell <- rbind(IFNg.pos.by.cell, df)
+  }
+  IFNg.pos.by.cell$Sample = sample
+  IFNg.pos.by.cell$Prop.MHCIIpos.cancer = Prop.MHCII.pos.cancer
+  
+  med.INFg.all <- rbind(med.INFg.all, IFNg.pos.by.cell)
 }
+```
+# Ploting the prorpotion of positive INFg cells per cell.type
+```{r}
+p <-  ggplot(med.INFg.all, aes(x=Prop.MHCIIpos.cancer, y=INFg.pos.prop)) + geom_point() + theme_bw() +
+      facet_wrap(~Global.names) + geom_smooth(method="lm") + stat_cor() +
+      ylab("INFg.positive.cells.fraction")
+print(p)
+ggsave("D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/Flow_cytometry_MHCII_INFg.png",
+       height = 12, width = 15, units = "cm")
+```
+# Plotting the response to drugs and proportions of MHCII pos cancer cells
+
+```{r}
+drug.responses
 ```
 
 ```{r}
-pass.samples <- c("S263_pOme", "S345_pOme", "S371_pAdnL",
-                  "S382_iOme", "S388_pOme","S404_iAdn")
-
-pass.INFg <- med.INFg.all %>% dplyr::filter(Sample %in% pass.samples)
-
-p <-  ggplot(pass.INFg, aes(x=Prop.MHCIIhigh.cancer, y=med.INFg)) + geom_point() + theme_bw() +
-      facet_wrap(~Second.annotation)
-print(p)
+MHCII.prop.by.sample <- med.INFg.all %>% select(Sample, Prop.MHCIIpos.cancer) %>% unique()
+sample.id2 <- sapply(drug.responses$sample, function(x){paste(strsplit(x,"_")[[1]][3:4],collapse="_")})
+sample.id2[which(sample.id2 == "2_S404")] = "S404_iAdn"
+drug.responses$sample.id <- sample.id2
+drug.reponse.mhcii <- merge(drug.responses, MHCII.prop.by.sample, by.x="sample.id", by.y="Sample")
 ```
+
+
+```{r}
+drug.marker <- drug.reponse.mhcii %>% dplyr::filter(marker == "GrzB",
+                                                    treatment %in% c("P10","T10","P10T10"))
+
+p <- ggplot(drug.marker, aes(x=Prop.MHCIIpos.cancer, y=log2fc_mean)) +
+      geom_point() + facet_wrap(~treatment) + 
+    stat_cor(method="spearman") + theme_bw() + labs(title="GrzB, logFC compared to control")
+print(p)
+ggsave("D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/Flow_cytometry_drugs_logFC.png",
+       height = 8, width = 14, units = "cm")
+```
+
