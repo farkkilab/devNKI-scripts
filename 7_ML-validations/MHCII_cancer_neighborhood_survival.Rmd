@@ -671,15 +671,15 @@ print(p)
 
 ggsave(p,
        file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions1_MHCII_cancer.png",
-       width = 13, height = 8, units = "cm")
+       width = 13, height = 7, units = "cm")
 ggsave(p,
        file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions1_MHCII_cancer.svg",
-       width = 13, height = 8, units = "cm")
+       width = 13, height = 7, units = "cm")
 
 
 
 #Plots for the cells with lowe  abundance
-cells.interest <- c("CD207.MY", "CD15.MY", "CD4.T.cells", "T.regs", "CD8.T.cells")
+cells.interest <- c("CD8.T.cells", "CD4.T.cells", "T.regs")
 MHCII.sel.cells <- MHCII.cell.prop %>% select(patient, MHCII.stat, therapy_sequence2, any_of(cells.interest))
 df <- melt(MHCII.sel.cells)
 colnames(df)[4] <- "Cell.type"
@@ -697,10 +697,10 @@ print(p)
 
 ggsave(p,
        file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions2_MHCII_cancer.png",
-       width = 13, height = 14, units = "cm")
+       width = 13, height = 7, units = "cm")
 ggsave(p,
        file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions2_MHCII_cancer.svg",
-       width = 13, height = 14, units = "cm")
+       width = 13, height = 7, units = "cm")
 
 
 #To add p-values to the last plots
@@ -711,11 +711,11 @@ p <- ggboxplot(df, x = "MHCII.stat", y = "value") + facet_wrap(~Cell.type) +
         strip.text = element_text(size=rel(1.15))) + 
   stat_compare_means(comparisons = my_comparisons, 
                      symnum.args=list(cutpoints = c(0, 0.0001, 0.001, 0.01, 0.05, Inf), symbols=c("****", "***", "**", "*", "ns"))) +
-  xlab("Prop. MHCII+ positives CCs") + ylim(0,0.4) +
+  xlab("Prop. MHCII+ positives CCs") + ylim(0,0.165) +
   ylab("tCycif cell type propotions")
 ggsave(p,
        file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/tCycif_proportions/Cell_proportions21_MHCII_cancer.svg",
-       width = 13, height = 14, units = "cm")
+       width = 13, height = 7, units = "cm")
 ```
 
 

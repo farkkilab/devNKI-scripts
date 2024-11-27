@@ -409,8 +409,8 @@ cibertsort.mhcii <- merge(cibertsort, EOC.mhcii, by.x="SampleID", by.y="Sample")
 
 cibertsort.mhcii$Celltype[cibertsort.mhcii$Celltype == "T.cells.regulatory..Tregs."] <- "T.cells.regulatory"
 
-cells.interest <- c("T.cells.CD4", "T.cells.regulatory", "T.cells.CD8", 
-                     "Macrophages.M0", "Macrophages.M1", "Macrophages.M2")
+cells.interest <- c("T.cells.CD8", "T.cells.CD4", "T.cells.regulatory", 
+                     "Macrophages.M1", "Macrophages.M2", "Macrophages.M0")
 
 
 df <- cibertsort.mhcii %>% filter(Celltype %in% cells.interest)
@@ -434,10 +434,10 @@ p <- ggboxplot(df, x = "MHCII.eoc.strat", y = "Proportion") + facet_wrap(~Cellty
 print(p)
 ggsave(p,
        file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/CIBERSORT_cell_proportions.png",
-       width = 13, height = 15, units = "cm")
+       width = 13, height = 12, units = "cm")
 ggsave(p,
        file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/CIBERSORT_cell_proportions.svg",
-       width = 13, height = 15, units = "cm")
+       width = 13, height = 12, units = "cm")
 
 
 
