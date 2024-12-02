@@ -101,7 +101,6 @@ merged.dat[merged.dat$GlobalCellType == "Other", "GlobalCellType"] <- "Others"
 ```
 
 
-
 ##Number of cores by patient
 ```{r, fig.width=3, fig.height=4}
 cores.by.patient <- merged.dat %>% 
