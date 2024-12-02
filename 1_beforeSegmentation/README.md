@@ -2,7 +2,8 @@
 
 ## Description
 
-Scripts used to get ready the pixel probability maps used for segmentations.
+Scripts used to get ready the pixel probability maps used for segmentations for cells. 
+Also to merge clinical information to stablish the molecular profile by patient.
 
 ## File list
 
@@ -17,5 +18,8 @@ Scripts used to get ready the pixel probability maps used for segmentations.
 ## Aditional notes
 
 For segmentation it was used CellProfiler v3.1, the corresponding workflow is the file "Dev_project_files/2_segment_ilastik.cpproj" stored in: https://datacloud.helsinki.fi/index.php/s/o7yZPTrYWB6jYNE 
-The Ilastik version used was 1.3.2, the Ilastik project used is the file "Dev_project_files/Ilastik_labeling/Cellring_nuclei_background_Selected-Channels_3.ilp" stored in: https://datacloud.helsinki.fi/index.php/s/o7yZPTrYWB6jYNE  
+
+The Ilastik version used was 1.3.2, the Ilastik project used is the file "Dev_project_files/Ilastik_labeling/Cellring_nuclei_background_Selected-Channels_3.ilp" stored in: 
+https://datacloud.helsinki.fi/index.php/s/o7yZPTrYWB6jYNE  
+
 R version used: 4.2.3
