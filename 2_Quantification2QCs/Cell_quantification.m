@@ -30,11 +30,11 @@ XYnames = {'X_position','Y_position'};
 % List of samples
 sampleList = dir( [ basePath 'TMA*' ] );
 
-%selected = [1, 2, 3, 4, 5, 6, 7, 8, 9];
-selected = 10;
+selected = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+%selected = 10;
 
-%parfor sample = 1:length(selected)
-for sample = 1
+parfor sample = 1:length(selected)
+%for sample = 1
     samp = selected(sample);
     sampleName = sampleList(samp).name;
     disp(sampleName)
