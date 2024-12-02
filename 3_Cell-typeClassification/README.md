@@ -12,6 +12,7 @@ Script used for cell type calling and plotting of results. As input it is used t
 - cell_type_caller_functions.R: Scripts with functions used by caller_NKI_Sep-2023.R. It contains functions for data trimming, constructing two gaussian mixture models for detection of cancer cells.
   
 - WSI_Tribus_run.ipynb: Scripts of Tribus to perform cell type calling on whole slide validation dataset. 
+- WSI_Tribus_visualization.ipynb: Scripts to visualize the result of Tribus analysis. Contains main Fig.3k. 
 - logic_table8.xlsx: Logic table required to run Tribus on whole slide validation dataset. 
 - WSI_Scimap_gating.ipynb: Scripts to perform cell gating on 2 whole slide images. Those 2 images have special staining patterns and Tribus didn't work well on those. 
 
