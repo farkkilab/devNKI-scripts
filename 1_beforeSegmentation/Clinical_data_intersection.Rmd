@@ -100,7 +100,7 @@ write.table(Molecular.profiles.new,
             sep=",", row.names=FALSE)
 ```
 
-
+# Writing resultant file used in subsequent analysis
 ```{r}
 colmns.interest <- c("cycif.slide", "cycif.core.id", "patient", "Molecular.profile2",
                      "figo_stage","therapy_sequence","finalstatus",
@@ -113,35 +113,4 @@ write.table(clindata.shrd.cores,
 ```
 
 
-```{r}
-clindata.shrd %>% filter(grepl("BRCA",BRCA_methylation), grepl("BRCA",BRCA_mutation)) %>% 
-                  select(patient, BRCA_mutation, BRCA_methylation, Molecular.profile2, Molecular_profile) %>% 
-                  unique()
-```
-
-
-
-```{r}
-clindata.shrd %>% select(patient, progression, refage, therapy_sequence, Molecular.profile2, timelastfu) %>%
-                  filter(patient != "OC liver", !is.na(timelastfu )) %>% 
-                  unique() %>% 
-                  mutate(PDSorIDS = ifelse(grepl("NACT", therapy_sequence), "NACT","PDS")) %>%
-                  mutate(Age.group = case_when(refage > 75 ~ ">75",
-                                               refage >= 65 & refage < 75 ~ "65-75",
-                                               refage < 65 ~ "<65")) %>% 
-                  count(progression) %>% 
-                  mutate(percent = n * 100 /sum(n))
-```
-
-```{r}
-a <- clindata.shrd %>% select(patient, progression, refage, therapy_sequence, Molecular.profile2,
-                         bevacizumab) %>%
-                  filter(patient != "OC liver") %>% 
-                  unique()
-```
-
-```{r}
-clindata.shrd.cores %>% filter(finalstatus != 2) %>% 
-                        summary()
-```
 

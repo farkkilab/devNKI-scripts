@@ -14,8 +14,8 @@ cropCoordsFileName = '*_cropCoords.mat';
 channelNames = readtable( [basePath filesep 'channel_list.csv'], 'ReadVariableNames', false);
 
 %Selection of chanels
-%chanelSelected= [1,2,3,4,6,10,12,14,15,16,22,38,39,40,42,43,44,46,47,48];
-chanelSelected = 1:48;
+chanelSelected= [1,2,3,4,6,10,12,14,15,16,22,38,39,40,42,43,44,46,47,48];
+%chanelSelected = 1:48;
 
 coresSelected = 10:25;
 
@@ -45,8 +45,8 @@ for sample = 1:length(sampleList)
         cropCoordsFiles = dir( [ basePath filesep sampleName filesep cropCoordsPath filesep cropCoordsFileName ] );
 
 
-        %for coreCoords = 1:length(cropCoordsFiles)
-        for coreCoords = coresSelected
+        for coreCoords = 1:length(cropCoordsFiles)
+        %for coreCoords = coresSelected
             coresFolder = [ destPath filesep sampleName filesep cropCoordsPath filesep outputfolder];
             mkdir(coresFolder);
 
