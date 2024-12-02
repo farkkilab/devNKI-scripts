@@ -1,0 +1,147 @@
+---
+title: "Clinical data intersection"
+output: html_notebook
+---
+
+
+```{r}
+library(dplyr)
+library(tidyverse)
+```
+
+
+#Reading clinical info
+```{r}
+#Reading file that matches the tCycif core IDs with samples IDs
+cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_intersection/All-slides_cycif2samples.txt",
+                            sep="\t", header = TRUE)
+
+#Clinical info
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.updated.csv", sep=",", header = TRUE)
+
+clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL", all.x = TRUE)
+
+#Loading shallowHRD results
+shallowHRDresults <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/shallowHRD_summary_table.csv",
+                                header=TRUE, sep=",")
+
+#shallowHRD results IDs
+IDs <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/sample_names_sWGS.csv", sep=",",
+                  header=TRUE)
+```
+
+
+
+#Merging clinical info with shallowHRD 
+```{r}
+colnames(shallowHRDresults)[3] <- "ShallowHRDcall"
+
+#Merging shallowHRD results with clinical data and samples IDs
+IDs$CF.ID.number <- as.numeric(sub("X","", IDs$CF.ID.number))
+clindata.swgs <- merge(clin.tcycif, IDs, by.x="CFsample", by.y="Description", all.x = TRUE)
+clindata.shrd <- merge(clindata.swgs, shallowHRDresults, by.x="CF.ID.number", by.y="Sample", all.x = TRUE)
+
+#Enlisting patients with no clinical information
+clindata.shrd %>% filter(patient != "OC liver") %>% 
+                select(patient, BRCA_methylation, BRCA_mutation, BRCAness_ovarium, QC_BRCA_CCNE, timelastfu) %>%
+                unique() %>% 
+                filter(is.na(BRCA_methylation))
+
+#List of patients with no shallowHRD and not BRCAloss
+#List of patients with a bad QC (QC==1), these are also considered as Others
+clindata.shrd %>% filter(patient != "OC liver") %>% 
+              select(patient, BRCA_methylation, BRCA_mutation, BRCAness_ovarium, QC_BRCA_CCNE, ShallowHRDcall) %>%
+              unique() %>% 
+              filter(!is.na(BRCA_methylation)) %>% 
+              filter(!(BRCA_methylation == "BRCA hypermethylation" |
+                      grepl("BRCA",BRCA_mutation))) %>% 
+              filter(is.na(ShallowHRDcall) | QC_BRCA_CCNE == 1)
+```
+
+
+#Creating new Molecular marker based on shallow HRD, CCNE1amp and BRCAness profile
+```{r}
+#List BRCAmut/met samples
+BRCAsamples <- clindata.shrd[which(clindata.shrd$BRCA_methylation == "BRCA hypermethylation" | grepl("BRCA", clindata.shrd$BRCA_mutation)),"patient"]
+
+CCNE1amp <- clindata.shrd[which(clindata.shrd$CCNE1_revised == "Amplification"), "patient"]
+
+#List of HRD and HRP samples according to shallowHRD
+HRDshallow <- clindata.shrd[which(clindata.shrd$ShallowHRDcall == "positive"),"patient"]
+HRPshallow <- clindata.shrd[which(clindata.shrd$ShallowHRDcall == "borderline" | clindata.shrd$ShallowHRDcall == "negative"),"patient"]
+
+#List of BRCAnessPos and BRCAnessNeg samples
+BRCAnessPos <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "BRCAness mutation"),"patient"]
+BRCAnessNeg <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "No BRCAness mutation"),"patient"]
+
+#Creating column Molecular.profile2, to store the merged of molecular profiles
+clindata.shrd$Molecular.profile2 <- rep("Other",  nrow(clindata.shrd))
+
+#Defining HRP in Molecular.profile2
+clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "HRP"
+
+#Defining CCNE1amp in Molecular.profile2
+clindata.shrd[which(clindata.shrd$patient %in% CCNE1amp), "Molecular.profile2"] <- "CCNE1amp"
+
+#Defining HRD in Molecular.profile2
+clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "HRD"
+clindata.shrd[which(clindata.shrd$QC_BRCA_CCNE == 1), "Molecular.profile2"] <- "Other"
+clindata.shrd[which(clindata.shrd$patient %in% BRCAsamples), "Molecular.profile2"] <- "BRCAmut/met"
+
+clindata.shrd$imageid <- paste0(clindata.shrd$cycif.slide, "_", clindata.shrd$cycif.core.id)
+
+colmns.interest <- c("Molecular.profile2", "patient","figo_stage","therapy_sequence","finalstatus",
+                "timelastfu","daystoprogression","progression")
+clindata.shrd.patient <- unique(clindata.shrd[,colmns.interest])
+
+Molecular.profiles.new <- clindata.shrd.patient %>% select(patient, Molecular.profile2, therapy_sequence)
+write.table(Molecular.profiles.new,
+            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
+            sep=",", row.names=FALSE)
+```
+
+
+```{r}
+colmns.interest <- c("cycif.slide", "cycif.core.id", "patient", "Molecular.profile2",
+                     "figo_stage","therapy_sequence","finalstatus",
+                      "timelastfu","daystoprogression","progression")
+clindata.shrd.cores <- unique(clindata.shrd[,colmns.interest])
+write.table(clindata.shrd.cores,
+            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_cores_20230314.csv",
+            sep=",", row.names=FALSE)
+
+```
+
+
+```{r}
+clindata.shrd %>% filter(grepl("BRCA",BRCA_methylation), grepl("BRCA",BRCA_mutation)) %>% 
+                  select(patient, BRCA_mutation, BRCA_methylation, Molecular.profile2, Molecular_profile) %>% 
+                  unique()
+```
+
+
+
+```{r}
+clindata.shrd %>% select(patient, progression, refage, therapy_sequence, Molecular.profile2, timelastfu) %>%
+                  filter(patient != "OC liver", !is.na(timelastfu )) %>% 
+                  unique() %>% 
+                  mutate(PDSorIDS = ifelse(grepl("NACT", therapy_sequence), "NACT","PDS")) %>%
+                  mutate(Age.group = case_when(refage > 75 ~ ">75",
+                                               refage >= 65 & refage < 75 ~ "65-75",
+                                               refage < 65 ~ "<65")) %>% 
+                  count(progression) %>% 
+                  mutate(percent = n * 100 /sum(n))
+```
+
+```{r}
+a <- clindata.shrd %>% select(patient, progression, refage, therapy_sequence, Molecular.profile2,
+                         bevacizumab) %>%
+                  filter(patient != "OC liver") %>% 
+                  unique()
+```
+
+```{r}
+clindata.shrd.cores %>% filter(finalstatus != 2) %>% 
+                        summary()
+```
+
