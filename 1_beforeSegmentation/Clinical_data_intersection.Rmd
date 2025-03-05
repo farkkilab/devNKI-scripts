@@ -7,6 +7,9 @@ output: html_notebook
 ```{r}
 library(dplyr)
 library(tidyverse)
+library(survival)
+library(survminer)
+library(gridExtra)
 ```
 
 
@@ -28,6 +31,14 @@ shallowHRDresults <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinsp
 #shallowHRD results IDs
 IDs <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/sample_names_sWGS.csv", sep=",",
                   header=TRUE)
+```
+
+
+```{r}
+clin.pat <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
+
+median(clin.pat$refage)
+IQR(clin.pat$refage)
 ```
 
 
@@ -91,13 +102,13 @@ clindata.shrd[which(clindata.shrd$patient %in% BRCAsamples), "Molecular.profile2
 clindata.shrd$imageid <- paste0(clindata.shrd$cycif.slide, "_", clindata.shrd$cycif.core.id)
 
 colmns.interest <- c("Molecular.profile2", "patient","figo_stage","therapy_sequence","finalstatus",
-                "timelastfu","daystoprogression","progression")
+                "timelastfu","daystoprogression","progression","refage","resdx")
 clindata.shrd.patient <- unique(clindata.shrd[,colmns.interest])
 
 Molecular.profiles.new <- clindata.shrd.patient %>% select(patient, Molecular.profile2, therapy_sequence)
 write.table(Molecular.profiles.new,
-            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
-            sep=",", row.names=FALSE)
+             file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
+             sep=",", row.names=FALSE)
 ```
 
 # Writing resultant file used in subsequent analysis
@@ -107,10 +118,136 @@ colmns.interest <- c("cycif.slide", "cycif.core.id", "patient", "Molecular.profi
                       "timelastfu","daystoprogression","progression")
 clindata.shrd.cores <- unique(clindata.shrd[,colmns.interest])
 write.table(clindata.shrd.cores,
-            file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_cores_20230314.csv",
-            sep=",", row.names=FALSE)
+             file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_cores_20230314.csv",
+             sep=",", row.names=FALSE)
 
 ```
 
+#Generating survival plots for patients according to their group
+```{r}
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/00_Survival_molecular_profiles/"
 
+
+clin.dat = clindata.shrd.patient[clindata.shrd.patient$patient != "OC liver",]
+
+#Structuring data for stage as continuous variable
+clin.dat$Stage <- NA
+clin.dat$Stage[clin.dat$figo_stage == "FIGO II"] <- 2
+clin.dat$Stage[clin.dat$figo_stage == "FIGO III"] <- 3
+clin.dat$Stage[clin.dat$figo_stage == "FIGO IV"] <- 4
+
+#Structuring Age in groups
+clin.dat$Age <- NA
+clin.dat$Age[clin.dat$refage < 50] <- 0
+clin.dat$Age[clin.dat$refage >= 50 & clin.dat$refage < 60] <- 1
+clin.dat$Age[clin.dat$refage >= 60 & clin.dat$refage < 70] <- 2
+clin.dat$Age[clin.dat$refage >= 70 & clin.dat$refage < 80] <- 3
+clin.dat$Age[clin.dat$refage >= 80] <- 4
+
+
+#Changing time to months
+clin.dat$Time <- (clin.dat$timelastfu) / 30.4
+clin.dat$daystoprogression <- (clin.dat$daystoprogression) / 30.4
+
+clin.dat$Therapy <- ifelse(grepl("NACT", clin.dat$therapy_sequence), "IDS","PDS")
+clin.dat$Therapy[which(is.na(clin.dat$therapy_sequence))] <- NA
+
+#Structuring molecular profiles
+clin.dat$Molecular.profile <- clin.dat$Molecular.profile2
+clin.dat$Molecular.profile[clin.dat$Molecular.profile == "BRCAmut/met"] <- "BRCAloss"
+clin.dat$Molecular.profile <- factor(clin.dat$Molecular.profile,
+                                     levels=c("HRP", "BRCAloss","CCNE1amp","HRD","Other"))
+
+
+formulas.cox <- c('Surv(Time, finalstatus) ~  Age + Stage + Molecular.profile',
+              'Surv(daystoprogression, progression)~ Age + Stage + Molecular.profile')
+
+formulas.kapplan <- c('Surv(Time, finalstatus) ~  Molecular.profile2',
+              'Surv(daystoprogression, progression)~ Molecular.profile2')
+
+
+formulas.names <- c("OS","PFI")
+formulas.labs <- c("OS probability","PFI probability")
+
+therapies <- c("IDS","PDS")
+
+#Generating a Kaplan–Meier plot per each therapy sequence
+for (t in therapies){
+  df <- clin.dat
+  df <- df %>% filter(Therapy == {t})
+  
+  for (i in 1:length(formulas.kapplan)){
+     #Cox model 
+     cox.model <- coxph(as.formula(formulas.cox[i]), data=df)
+     p1 <- ggforest(cox.model, data = df, main=paste0(formulas.labs[i]," ", t))
+     print(p1)
+     ggsave(p1, file=paste0(out.folder.name, "Cox_",t, "_", formulas.names[i],".png"),
+           width = 14, height = 7, units = "cm")
+     ggsave(p1, file=paste0(out.folder.name, "Cox_",t, "_", formulas.names[i],".svg"),
+           width = 14, height = 7, units = "cm")
+     
+     #Kapplan-Meir
+     fit <- survfit(as.formula(formulas.kapplan[i]), data = df)
+     logrank = surv_pvalue(fit, clin.dat)
+     pval=logrank$pval.txt
+     
+     #Kapplan-Meir
+     p <- ggsurvplot(fit, data = df, risk.table = TRUE, pval=FALSE,
+                        #conf.int = TRUE, palette = c("#4d4dff", "#ff5a36"),
+                       legend.labs=c("BRCAloss","CCNE1amp","HRD","HRP","Other"),
+                        tables.y.text = FALSE, legend.title="",
+                       break.time.by=30,
+                     ylab=formulas.labs[i]) 
+     p$plot <- p$plot + guides(colour = guide_legend(nrow = 2))
+     p$plot <- p$plot + theme(legend.key.width = unit(3, "line"),
+                                  plot.margin = margin(t = 0,  r = 2, b = 0, l = 1.5, unit = "cm"),
+                                  legend.key.height = unit(1.5, "line"))
+     p$plot <- p$plot + ggplot2::annotate("text", x = 75, y = 0.85, label =pval, size = 5)
+     p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 5, l = 2, unit = "cm"))
+     plot.to.save <- list(p$plot, p$table)
+     ggsave(file=paste0(out.folder.name,"Kapplan_",t, "_", formulas.names[i],".png"),
+           arrangeGrob(grobs = plot.to.save, ncol = 1),
+         width = 13, height = 19, units = "cm")
+  }
+}
+
+formulas.cox <- c('Surv(Time, finalstatus) ~  Age + Stage + Therapy +  Molecular.profile',
+              'Surv(daystoprogression, progression)~ Age + Stage +  Therapy + Molecular.profile')
+
+for (i in 1:length(formulas.kapplan)){
+   cox.model <- coxph(as.formula(formulas.cox[i]), data=clin.dat)
+   p1 <- ggforest(cox.model, data = clin.dat, main=paste0(formulas.labs[i]," full cohort"))
+   print(p1)
+   ggsave(p1, file=paste0(out.folder.name, "Cox_Both_", formulas.names[i],".png"),
+         width = 12, height = 8.5, units = "cm")
+   ggsave(p1, file=paste0(out.folder.name, "Cox_Both_", formulas.names[i],".svg"),
+         width = 12, height = 8.5, units = "cm")
+  
+  #Kapplan-Meir
+  fit <- survfit(as.formula(formulas.kapplan[i]), data = clin.dat)
+  logrank = surv_pvalue(fit, clin.dat)
+  pval=logrank$pval.txt
+  
+  p <- ggsurvplot(fit, data = clin.dat, risk.table = TRUE, pval=FALSE,
+                    #conf.int = TRUE, palette = c("#4d4dff", "#ff5a36"),
+                   legend.labs=c("BRCAloss","CCNE1amp","HRD","HRP","Other"),
+                    tables.y.text = FALSE, legend.title="",
+                   break.time.by=30,
+                 ylab=formulas.labs[i])
+  p$plot <- p$plot + guides(colour = guide_legend(nrow = 2))
+  p$plot <- p$plot + ggplot2::annotate("text", x = 75, y = 0.85, label =pval, size = 5)
+  p$plot <- p$plot + theme(legend.key.width = unit(3, "line"),
+                                  plot.margin = margin(t = 0,  r = 2, b = 0, l = 1.5, unit = "cm"),
+                                  legend.key.height = unit(1.5, "line"))
+  p$table <- p$table + theme(plot.margin = margin(t = 0,  r = 2, b = 5, l = 2, unit = "cm"))
+  
+  plot.to.save <- list(p$plot, p$table)
+  ggsave(file=paste0(out.folder.name,"Kapplan_Both_", formulas.names[i],".png"),
+           arrangeGrob(grobs = plot.to.save, ncol = 1),
+         width = 13, height = 19, units = "cm")
+  ggsave(file=paste0(out.folder.name,"Kapplan_Both_", formulas.names[i],".svg"),
+         arrangeGrob(grobs = plot.to.save, ncol = 1),
+       width = 13, height = 19, units = "cm")
+}
+```
 
