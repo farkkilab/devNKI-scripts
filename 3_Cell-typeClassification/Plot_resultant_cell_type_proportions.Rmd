@@ -10,6 +10,8 @@ library(ggplot2)
 library(dplyr)
 library(gridExtra)
 library(RColorBrewer)
+library(EnvStats)
+library(ggpubr)
 ```
 
 
@@ -21,10 +23,11 @@ tribus.subfolder = "Tribus_Cell-segment_202311/"
 celltypes.file.suffix = "_cellTypes.csv"
 CellTypes2ignore = c("InsideROI", "LostCell", "LowDapi", "Out.of.core")
 clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.updated.csv", sep=",", header = TRUE)
-cores2ignore1 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_cores_to_ignore.csv", sep=",")
+cores2ignore1 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_cores_to_ignore.csv",
+                            sep=",")
 cores2ignore2 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_extra-cores_to_ignore.csv",
                             sep = ",", header = TRUE)
-cores2ignore3 <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_cores_to_ignore_extra3.csv",
+cores2ignore3 = read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/utils/Total_cores_to_ignore_extra3.csv",
                             sep = ",", header = TRUE)
 
 Mol.profiles.patients <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
@@ -101,16 +104,6 @@ merged.dat[merged.dat$GlobalCellType == "Other", "GlobalCellType"] <- "Others"
 ```
 
 
-##Number of cores by patient
-```{r, fig.width=3, fig.height=4}
-cores.by.patient <- merged.dat %>% 
-                          group_by(patient) %>% 
-                          summarise(n = length(unique(cycif.core.id)))
-
-barplot(table(cores.by.patient$n), xlab="Number of cores", ylab="Number of patients")
-
-```
-
 #Barplot with percentage of immune, stromal and cancer cells per patient
 ```{r}
 out.put.subfolder <- "01_Cell-proportions_Heatmaps_Nov2023/"
@@ -145,6 +138,7 @@ merged.types.patients$patient <- factor(merged.types.patients$patient, levels=df
 
 colnames(merged.types.patients)[c(1,2)] <- c("Patient","Cell.type")
 
+#For Figure 1b
 p <- ggplot(merged.types.patients, aes(x=Patient, y=Proportion, fill=Cell.type)) +
         geom_bar(stat="identity") + theme_classic() +
         scale_fill_manual(values = c("#cd00cd", "#FF7F00", "#2F82B9", "#e6c200", "grey")) +
@@ -191,6 +185,7 @@ my.cell.levels <- c("CD11c.MY","CD15.MY","CD207.MY", "Other.MY", "CD163.MP", "CD
 merged.types.patients$Cell.type <- factor(merged.types.patients$Cell.type,
                                     levels = my.cell.levels)
 
+#For Figure 1f
 p <- ggplot(merged.types.patients, aes(x=Patient, y=Proportion, fill=Cell.type)) +
         geom_bar(stat="identity") + theme_classic() +
         scale_fill_manual(values = mycolors) +
@@ -202,50 +197,6 @@ ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Proportions-barpl
 ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Proportions-barplot_Immune.png"),
         width = 15, height = 9, units = "cm")
 
-########################## ########################## ########################## 
-########################## Now for Immune merged cells #################
-aux.dat <- merged.dat
-aux.dat <- aux.dat[aux.dat$GlobalCellType != "Cancer" & aux.dat$GlobalCellType != "Stromal" & aux.dat$GlobalCellType != "Others",]
-
-aux.dat$GlobalCellType[grep("CD8", aux.dat$GlobalCellType)] <- "CD8.T.cells"
-aux.dat$GlobalCellType[grep("CD4", aux.dat$GlobalCellType)] <- "CD4.T.cells"
-
-merged.types.patients <- aux.dat %>% 
-                          group_by(patient,GlobalCellType) %>% 
-                          summarise(n=n()) %>%
-                          mutate(Proportion=n * 100 / sum(n))
-
-df <- merged.types.patients %>% 
-	dplyr::filter(GlobalCellType=="CD8.T.cells") %>% 
-	arrange(desc(Proportion))
-
-
-merged.types.patients$patient <- factor(merged.types.patients$patient, levels=df$patient)
-
-colnames(merged.types.patients)[c(1,2)] <- c("Patient","Cell.type")
-
-nb.cols <- length(unique(merged.types.patients$Cell.type)) - 2
-mycolors <- colorRampPalette(brewer.pal(8, "Paired"))(nb.cols)
-mycolors <- c(mycolors,"purple", "grey")
-
-my.cell.levels <- c("CD8.T.cells", "CD4.T.cells", "T.regs", "CD11c.MY",
-                    "CD163.MP","CD207.MY", "CD68.MP", "CD15.MY", "Other.MY", "B.cells", "Other.immune")
-
-merged.types.patients$Cell.type <- factor(merged.types.patients$Cell.type,
-                                    levels = my.cell.levels)
-
-p <- ggplot(merged.types.patients, aes(x=Patient, y=Proportion, fill=Cell.type)) +
-        geom_bar(stat="identity") + theme_classic() +
-        scale_fill_manual(values = mycolors) +
-        theme(axis.text.x=element_text(size=rel(0.2), angle = 65, hjust = 1), legend.position="top",
-              legend.text = element_text(size=7), legend.key.size = unit(0.4, 'cm'), legend.title = element_text(size=5))
-print(p)
-ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Proportions-barplot_Immune_merged.svg"),
-        width = 15, height = 9, units = "cm")
-ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Proportions-barplot_Immune_merged.png"),
-        width = 15, height = 9, units = "cm")
-
-rm(aux.dat)
 ```
 #Function for plotting UMAPS
 ```{r}
@@ -309,19 +260,11 @@ immune.channels.UMAPs <- c("CD3d","CD8a","CD4","FOXP3","CD68", "MHCII", "CD15",
                            "CD11b", "CD20", "CD163","CD207","CD11c", "PD1","CD45RO")
 N.sampling = 50000 #Number of cells to sample for UMAP
 
-global.colors <- c("#cd00cd", "#FF7F00", "#2F82B9", "#e6c200", "grey") #Global.celltypes
-
-myloid.colors  <- c("#ade6e6", "#add8e6", "#0095b6", "#2F82B9", "#8DC594", "#62B74F")
-lymphocite.colors <- c("#e4717a", "#E94330", "#ff0000", "#ff6e4a", "#FF7F00", "#FDB661", "yellow")
-b.cells.color <-  "purple"
-other.color <- "grey"
-
-immune.colors <- c(myloid.colors, lymphocite.colors, b.cells.color, other.color)
-
 immune.levels <- c("CD11c.MY","CD15.MY","CD207.MY", "Other.MY", "CD163.MP", "CD68.MP",
                     "CD4.T.cells", "CD4.CD45RO.T.cells", "CD4.PD1.T.cells", "CD8.CD45RO.T.cells",
                     "CD8.effector.T.cells", "CD8.PD1.T.cells", "T.regs", "B.cells",
                     "Other.immune")
+
 
 #Generating input data for global cell.types UMAPs
 sampled.global <- scaling.sampling(merged.dat, global.channels.UMAPs, N.sampling, slide.name="cycif.slide")
@@ -354,7 +297,17 @@ immune.uplot = data.frame(x = umap.immune[,1], y= umap.immune[,2])
 
 #Plotting UMAPs
 ```{r}
+global.colors <- c("#cd00cd", "#FF7F00", "#2F82B9", "#e6c200", "grey") #Global.celltypes
+
+myloid.colors  <- c("#ade6e6", "#add8e6", "#0095b6", "#2F82B9", "#8DC594", "#62B74F")
+lymphocite.colors <- c("#e4717a", "#E94330", "#ff0000", "#ff6e4a", "#FF7F00", "#FDB661", "yellow")
+b.cells.color <-  "purple"
+other.color <- "grey"
+
+immune.colors <- c(myloid.colors, lymphocite.colors, b.cells.color, other.color)
+
 #Plotting UMAP for immune cells
+#For Figure 1g
 l = ggplot(immune.uplot,aes(x,y, color=types.sampled.immune))+ geom_point(size=0.4, stroke=0, alpha=0.7)+
     #geom_density_2d(color="grey60", alpha=0.6, size = 0.25) +
     scale_fill_viridis(discrete = TRUE) +
@@ -374,6 +327,7 @@ ggsave(l, filename = paste0(output.folder, out.put.subfolder, "UMAP_Immunes.png"
 
 
 # #Plotting UMAP for global cell types
+#For Figure 1d
 l = ggplot(global.uplot,aes(x,y, color=types.sampled.global))+ geom_point(size=0.4, stroke=0, alpha=0.7)+
     #geom_density_2d(color="grey60", alpha=0.6, size = 0.25) +
     scale_fill_viridis(discrete = TRUE) +
@@ -400,6 +354,7 @@ core.percentages <- merged.dat %>% group_by(patient, cycif.core.id, GlobalCellTy
                     summarise(n = n()) %>%
                     mutate(Proportion = n / sum(n))
 
+#The max proportion by core was assessed previously by Pathologist, so to replicate this we also used the Max
 max.cell.percentages <- core.percentages  %>%
                         group_by(patient, GlobalCellType) %>%
                         summarise(Proportion=max(Proportion))
@@ -412,41 +367,6 @@ med.cell.percentages <- core.percentages  %>%
 cell.patient.percentages <- merged.dat %>% group_by(patient, GlobalCellType) %>%
                     summarise(n = n()) %>%
                     mutate(Proportion = n  / sum(n))
-
-#Maximum cell percentage by patient
-p1 <- ggplot(max.cell.percentages, aes(x=GlobalCellType, y=Proportion)) +
-  geom_point() + geom_boxplot(fill=NA) +
-  theme_bw() + coord_flip() 
-
-p2 <- p1 + ylim(0,35)
-print(p1)
-print(p2)
-
-ggsave(p1, filename = paste0(output.folder, out.put.subfolder, "Proportions-Max-boxplot.png"),
-        width = 15, height = 9, units = "cm")
-ggsave(p1, filename = paste0(output.folder, out.put.subfolder, "Proportions-Max-boxplot.svg"),
-        width = 15, height = 9, units = "cm")
-ggsave(p2, filename = paste0(output.folder, out.put.subfolder, "Proportions-Max-boxplot_cut.png"),
-        width = 15, height = 9, units = "cm")
-ggsave(p2, filename = paste0(output.folder, out.put.subfolder, "Proportions-Max-boxplot_cut.svg"),
-        width = 15, height = 9, units = "cm")
-
-
-#Total cell percentage by patient
-p1 <- ggplot(cell.patient.percentages, aes(x=GlobalCellType, y=Proportion)) +
-  geom_point() + geom_boxplot(fill=NA) +
-  theme_bw() + coord_flip() 
-
-p2 <- p1 + ylim(0,0.3)
-print(p1)
-print(p2)
-
-ggsave(p1, filename = paste0(output.folder, out.put.subfolder, "Proportions-total-boxplot.png"),
-        width = 15, height = 9, units = "cm")
-ggsave(p1, filename = paste0(output.folder, out.put.subfolder, "Proportions-total-boxplot.svg"),
-        width = 15, height = 9, units = "cm")
-ggsave(p2, filename = paste0(output.folder, out.put.subfolder, "Proportions-total-boxplot_cut.png"), width = 15, height = 9, units = "cm")
-ggsave(p2, filename = paste0(output.folder, out.put.subfolder, "Proportions-total-boxplot_cut.svg"), width = 15, height = 9, units = "cm")
 ```
 
 
@@ -469,12 +389,28 @@ cells_percentages.m[is.na(cells_percentages.m)] <- 0
 
 cells_percentages.mc <- merge(cells_percentages.m, clinical.info, by.x="patient", by.y="TnumberAVL")
 
+#Categorizing the CD20 groups, according to previous annotations by Pathologists
+cells_percentages.mc <- cells_percentages.mc %>% mutate(CD20 = case_match (
+                                                   max_CD20,
+                                                   "0" ~ "<20",
+                                                   "1-5" ~ "<20",
+                                                   "6-19" ~ "<20",
+                                                   "20-50" ~ "20-50",
+                                                   "50-100" ~ ">=50",
+                                                   ">100" ~ ">=50",
+                                                   .default=NA
+                                                 ))
+
 cells_percentages.mc$CD20 <- factor(cells_percentages.mc$CD20, levels=c("<20","20-50",">=50"))
 
-p <- ggplot(cells_percentages.mc, aes(x=CD20, y=B.cells)) + ylim(0,0.21) +
-  geom_point(position= position_jitter(width= .2), size= 2, alpha = 0.5) +
-  geom_boxplot(fill=NA) + theme_bw() + xlab("IHC CD20 category by pathologist") +
-  ylab("t.CyCIF B.cell proportion")
+df <- cells_percentages.mc %>% filter(!is.na(CD20))
+
+#For Supplementary Figure 1e
+p <- ggplot(df, aes(x=CD20, y=B.cells)) +# ylim(0,0.95) +
+  geom_point(position= position_jitter(width= .2), size= 2, alpha = 0.5) + stat_n_text() +
+  geom_boxplot(fill=NA, outlier.shape = NA) + theme_bw() + geom_violin(fill=NA) +
+  xlab("IHC CD20 category by pathologist") +
+  ylab("Max. t.CyCIF B.cell proportion per tumor") + stat_n_text()
 print(p)
 ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Boxplot_CD20-B.cells.svg"),
         width = 7, height = 8, units = "cm")
@@ -520,12 +456,29 @@ cells_percentages.m[is.na(cells_percentages.m)] <- 0
 
 cells_percentages.mc <- merge(cells_percentages.m, clinical.info, by.x="patient", by.y="TnumberAVL")
 
+#Categorizing the CD20 groups, according to previous annotations by Pathologists
+cells_percentages.mc <- cells_percentages.mc %>% mutate(CD8 = case_match (
+                                                   max_CD8,
+                                                   "0" ~ "<20",
+                                                   "1-5" ~ "<20",
+                                                   "6-19" ~ "<20",
+                                                   "20-50" ~ "20-100",
+                                                   "50-100" ~ "20-100",
+                                                   ">100" ~ ">=100",
+                                                   .default=NA
+                                                 ))
+
 cells_percentages.mc$CD8 <- factor(cells_percentages.mc$CD8, levels=c("<20","20-100",">=100"))
 
-p <- ggplot(cells_percentages.mc, aes(x=CD8, y=CD8.T.cells)) +
+df <- cells_percentages.mc %>%  filter(!is.na(CD8))
+
+
+#For Supplementary Figure 1d
+p <- ggplot(df, aes(x=CD8, y=CD8.T.cells)) +
   geom_point(position= position_jitter(width= .2), size= 2, alpha = 0.5) +
-  geom_boxplot(fill=NA) + theme_bw() + ylim(0,0.23) + xlab("IHC CD8 category by pathologist") +
-  ylab("t.CyCIF CD8.T cells proportion")
+   stat_n_text() + #ylim(0,0.23) +
+  geom_boxplot(fill=NA, outlier.shape = NA) + theme_bw() + xlab("IHC CD8 category by pathologist") +
+  ylab("Max. t.CyCIF CD8.T cells proportion per tumor")
 print(p)
 ggsave(p, filename = paste0(output.folder, out.put.subfolder, "Boxplot_CD8-CD8T.cells.svg"),
         width = 7, height = 8, units = "cm")
@@ -548,7 +501,7 @@ rm(aux.dat)
 
 #Saving the proportion of cell by core
 ```{r}
-out.put.subfolder="01_Survival_Proportions_November_medians/"
+out.put.subfolder="/01_Cell-proportions_Heatmaps_Nov2023/"
 core.percentages <- merged.dat %>% group_by(patient, cycif.core.id, GlobalCellType) %>%
                     summarise(n = n()) %>%
                     mutate(Proportion = n / sum(n))
@@ -559,13 +512,43 @@ write.table(tab, file=paste0(output.folder, out.put.subfolder, "Proportions_by_c
 ```
 
 
-###Performing heatmaps for the expression of data
-```{r Heatmaps}
-source("gates_NKI_2023.R")
-source("cell_type_caller_functions.R")
-source("qc_functions.R")
+###Performing heatmaps for the mean expression of markers across cell populations
+```{r}
+source("../3_Cell-typeClassification/Celltype-markers_logic_NKI_2023.R")
+source("../3_Cell-typeClassification/cell_type_caller_functions.R")
+source("../3_Cell-typeClassification/qc_functions.R")
 
-out.put.subfolder <- "01_Cell-proportions_Heatmaps/"
+out.put.subfolder <- "/01_Cell-proportions_Heatmaps_Nov2023/"
+
+###########Auxiliary function produce the heatmaps #########################
+make.heatmap <- function(input.dat, channels.sel){
+  means.by.cell.type =  input.dat %>% 
+                                   select(any_of(c(channels.sel,"GlobalCellType"))) %>% 
+                                   group_by(GlobalCellType) %>%
+                                   summarise(across(where(is.numeric),.fns = mean)) %>% as.data.frame()
+  
+  counts.cell.type = input.dat %>% 
+                                   group_by(GlobalCellType) %>%
+                                   count() %>% as.data.frame()
+  N.cells <- counts.cell.type$n
+  names(N.cells) <- counts.cell.type$GlobalCellType
+  
+  row.names(means.by.cell.type) <- means.by.cell.type[,"GlobalCellType"]
+  mat2 <- as.matrix(means.by.cell.type[,-1])
+  
+  row_ha = rowAnnotation(N.cells=anno_barplot(N.cells))
+  
+  heat = Heatmap(mat2,
+           column_title  = "", column_title_side="bottom",
+           column_title_gp = gpar(fontsize = 7), cluster_rows=T, border = T, 
+            name='Scale', width = ncol(mat2)*unit(7, "mm"), height = nrow(mat2)*unit(7, "mm"),
+           color=colorRampPalette(c("#0e74b3","white","#cf242a"),interpolate="linear")(200),
+            right_annotation=row_ha, row_names_gp = gpar(fontsize = 15), 
+           column_names_rot = 45, column_names_gp = gpar(fontsize = 15),
+          heatmap_legend_param = list(direction = "horizontal"))
+  return(heat)
+}
+
 
 ###########A function to make the heatmaps for several inputs #########################
 heatmap.plots <- function(data.in, channels.of.interest, suffix="Global-celltypes",
@@ -579,34 +562,23 @@ heatmap.plots <- function(data.in, channels.of.interest, suffix="Global-celltype
                                             normalization ="min.max")
   
   print("Normalization done")
-  #Scaling Eccentricity in whole dataset
-  aux.data.norm.slide1$Eccentricity <- as.vector(scale(aux.data.norm.slide1$Eccentricity))
-  aux.data.norm.slide2$Eccentricity <- as.vector(scale(aux.data.norm.slide2$Eccentricity))
-  aux.data.norm.slide2$Eccentricity <- min_max_norm(aux.data.norm.slide2$Eccentricity)
   
-  if (Eccentricity.val){
-    channels.of.interest <- c(channels.of.interest, "Eccentricity")
-  }
+  plot = make.heatmap(aux.data.norm.slide1, channels.of.interest)
   
-  ind.plots1 = index_plots(aux.data.norm.slide1, aux.data.norm.slide1,
-                          gates.input=channels.of.interest,
-                          scaling = FALSE)
-  
-  ind.plots2 = index_plots(aux.data.norm.slide2, aux.data.norm.slide2,
-                          gates.input=channels.of.interest,
-                          scaling = FALSE)
   print(paste0("Saving files: ", output.folder,
                out.put.subfolder, "Heatmap_",suffix,"_zscore.pdf"))
   pdf(file=paste0(output.folder, out.put.subfolder, "Heatmap_",suffix,"_zscore.pdf"),
-      height = 8, width = 10)
-  print(ind.plots1[[3]])
+      height = 7, width = 9)
+  print(plot)
   dev.off()
-  print(ind.plots1[[3]])
-  pdf(file=paste0(output.folder, out.put.subfolder, "Heatmap_", suffix,"_min-max.pdf"),
-      height = 8, width = 10)
-  print(ind.plots2[[3]])
+  print(plot)
+  
+  plot = make.heatmap(aux.data.norm.slide2, channels.of.interest)
+    pdf(file=paste0(output.folder, out.put.subfolder, "Heatmap_", suffix,"_min-max.pdf"),
+      height = 7, width = 9)
+  print(plot)
   dev.off()
-  print(ind.plots2[[3]])
+  print(plot)
 }
 ######################Making plots for different datasets######################
 channels.for.Globalplots <- c("CK7","ECadherin", unique(c(unlist(global.gates),         
@@ -614,20 +586,24 @@ channels.for.Globalplots <- c("CK7","ECadherin", unique(c(unlist(global.gates),
                                                           unlist(Lymphoid.gate),
                                                           unlist(Myeloid.gate),
                                                           unlist(cd8.gates))))
+
+#Selecting only the markers used for cell phenotype
 channels.for.Globalplots <- channels.for.Globalplots[channels.for.Globalplots != "Eccentricity"]
 
-channels.for.Globalplots <- c(channels.for.Globalplots, "CD20", "CD15", "CD68")
+channels.for.Globalplots <- c(channels.for.Globalplots, "CD20", "CD15")
 
 channels.for.Immuneplots <- channels.for.Globalplots[!channels.for.Globalplots %in%
                                           c("ECadherin", "CK7", "aSMA", "Vimentin", "CD31")]
 
+#Selecting only  the immune cells
 merged.dat.immune <- merged.dat %>% dplyr::filter(GlobalCellType != "Cancer",
                                                   GlobalCellType != "Stromal",
                                                   GlobalCellType != "Others")
 
-
+#Generating Supplementary Figure 1c
 heatmap.plots(merged.dat, channels.for.Globalplots, suffix="Global-celltypes",
               Eccentricity.val=TRUE)
+
 
 heatmap.plots(merged.dat.immune, channels.for.Immuneplots, suffix="Immune-celltypes",
               Eccentricity.val=FALSE)
