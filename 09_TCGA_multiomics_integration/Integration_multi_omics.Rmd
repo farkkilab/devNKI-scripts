@@ -1,0 +1,271 @@
+---
+title: "Compiling TCGA multi-omics"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(reshape2)
+```
+
+
+#Reading input files
+```{r}
+#Reading input files
+
+#List of allele specific copy number files
+segments.file <- "D:/users/fperez/HRD/TCGA_analysis/Segments_allCancers/segments_TCGA.txt"
+
+#Methylation files
+methylation1.file <- "D:/users/fperez/NKI_TMAs_AF/TCGA_methylation_mutations_loh/Intermediate_files/Methylation/HumanMethylation27_methylation_byGene.txt"
+
+methylation2.file <- "D:/users/fperez/NKI_TMAs_AF/TCGA_methylation_mutations_loh/Intermediate_files/Methylation/HumanMethylation27_methylation_byGene.txt"
+
+#Mutations file
+mutations.files <- "D:/users/fperez/NKI_TMAs_AF/TCGA_methylation_mutations_loh/Intermediate_files/Somatic_mutations/mc3.v0.2.8.PUBLIC_OVA-MHCIIgenes.csv"
+
+#Selecting genes of interest (in this case MHCII genes)
+genes.interest.file <- "D:/users/fperez/NKI_TMAs_AF/TCGA_methylation_mutations_loh/Input/MHCII_genes.txt"
+genes.interest <- scan(genes.interest.file, what = "text")
+genes.coordinates <- read.table(file="D:/users/fperez/NKI_TMAs_AF/TCGA_methylation_mutations_loh/Input/MHCII_genes_coordinates.txt", sep="\t", header=TRUE)
+
+
+#Clinical information for the samples
+clnical.info <- read.csv(file="D:/users/fperez/HRD/TCGA_analysis/clinical_PANCAN_patient_with_followup.tsv",
+                            sep="\t", header = TRUE)
+
+#File with long sample ID `0298819c-c447-44f3-9067-433801c5838a` and tissue of origin
+tcga_histology <- read.table(file="D:/users/fperez/HRD/TCGA_analysis/Segments_allCancers/gdc_sample-tissue.txt",
+                             sep="\t", header=TRUE) #File made by hand using the filenames
+
+#Sample_sheet files
+sample.sheets <- grep(pattern = "gdc_sample_sheet", list.files("D:/users/fperez/HRD/Endometrial/TCGA_files/",
+                                                  full.names = TRUE), value = TRUE)
+#Selection of tissue for allelic imbalances file
+tissue.interest <- c("OV")
+```
+
+
+#Editing the sample sheet info file
+```{r}
+#Reading files 
+sample.sheets.info <- do.call("rbind",lapply(sample.sheets, function(x){
+  read.table(x, header = TRUE, sep="\t")
+}))
+#Getting name of the file from sample sheet (this the corresponding in segments file)
+AIs.filename <- sapply(sample.sheets.info$File.Name, function(x){
+  strsplit(x, "\\.")[[1]][2]
+})
+
+sample.sheets.info <- cbind(sample.sheets.info, AIs.filename)
+rownames(sample.sheets.info) <- 1:nrow(sample.sheets.info)
+
+#Getting name of the sample in simple version like: "TCGA-GM-A2DI"
+sample.sheets.info$Case.ID <- sapply(sample.sheets.info$Case.ID, function(x){strsplit(x,",")[[1]][1]})
+sample.sheets.info
+```
+
+
+
+#Reading segments from all TCGA
+```{r}
+#Reading allelic imbalances input and merging with 
+tcga_segments_raw <- read.table(file="D:/users/fperez/HRD/TCGA_analysis/Segments_allCancers/segments_TCGA.txt",
+                                sep="\t", header=TRUE)
+
+tcga_segments <- tcga_segments_raw
+
+tcga.segs <- data.frame(SampleID = tcga_segments[,1],
+                        Chromosome = tcga_segments[,2],
+                        Start_position = tcga_segments[,3],
+                        End_position = tcga_segments[,4],
+                        total_cn = tcga_segments[,5],
+                        A_cn  = tcga_segments[,6],
+                        B_cn = tcga_segments[,7])
+
+#Adding the cancer type in the last column
+tcga.segs.info <- merge(tcga.segs, tcga_histology, by.x="SampleID", by.y="sampleID")
+
+#Select only cancer samples from tissues of interest
+sel.segs <- tcga.segs.info[tcga.segs.info$tissue %in% tissue.interest,]
+```
+
+
+#Identification of samples with LOH in the MHCII genes
+```{r}
+#Identification of samples with LOH in the MHCII genes
+#Changing names from segment files to regular TGCA codes (example: TCGA-BK-A0CC)
+tcga.segs.t <- sel.segs %>% dplyr::filter(tissue %in% tissue.interest) %>% dplyr::select(-tissue)
+tcga.segs.t.id <- merge(tcga.segs.t,  sample.sheets.info, by.x="SampleID", by.y="AIs.filename")
+tcga.segs.t.id <- tcga.segs.t.id %>%
+                          dplyr::select(Case.ID, Chromosome, Start_position, End_position, total_cn, A_cn, B_cn)
+
+#Selecting only LOH segments
+sel.LOH  <- tcga.segs.t.id[tcga.segs.t.id$A_cn >= 0 & tcga.segs.t.id$B_cn ==0,]
+
+#By HRD genes name, take HRD gene coordinates, then identify the samples with LOH in the corresponding HRD gene
+mat.LOH.samples.genes  <- sapply(genes.coordinates$Gene, function(x){
+    gene.row <- which(genes.coordinates$Gene == x) #Row number, colnames: Gene,Chromosome,Start,End
+    #Get sample name with an LOH in the corresponding gene
+    LOH.sample.gene <- sel.LOH %>% 
+                          dplyr::filter(Chromosome == paste0("chr",genes.coordinates[gene.row,"Chromosome"]),
+                              Start_position <= genes.coordinates[gene.row,"start"] &
+                              End_position >= genes.coordinates[gene.row,"end"]) %>%
+                              pull(Case.ID) %>% unique()
+    #For all input samples get if those have LOH or not
+    LOH.gene <- ifelse(unique(tcga.segs.t.id$Case.ID) %in% LOH.sample.gene, 1,0) 
+})
+row.names(mat.LOH.samples.genes) <- unique(tcga.segs.t.id$Case.ID)
+LOH.samples.genes <- as.data.frame(mat.LOH.samples.genes)
+LOH.samples.genes$sample <-  row.names(LOH.samples.genes)
+LOH.samples.genes
+```
+
+
+
+
+#Identification of samples with deletion in the MHCII genes
+```{r}
+#Identification of samples with LOH in the MHCII genes
+#Changing names from segment files to regular TGCA codes (example: TCGA-BK-A0CC)
+tcga.segs.t <- sel.segs %>% dplyr::filter(tissue %in% tissue.interest) %>% dplyr::select(-tissue)
+tcga.segs.t.id <- merge(tcga.segs.t,  sample.sheets.info, by.x="SampleID", by.y="AIs.filename")
+tcga.segs.t.id <- tcga.segs.t.id %>%
+                          dplyr::select(Case.ID, Chromosome, Start_position, End_position, total_cn, A_cn, B_cn)
+
+#Selecting only deletions segments
+sel.del  <- tcga.segs.t.id[tcga.segs.t.id$total_cn  == 0,]
+
+#By HRD genes name, take HRD gene coordinates, then identify the samples with LOH in the corresponding HRD gene
+mat.del.samples.genes  <- sapply(genes.coordinates$Gene, function(x){
+    gene.row <- which(genes.coordinates$Gene == x) #Row number, colnames: Gene,Chromosome,Start,End
+    #Get sample name with an LOH in the corresponding gene
+    del.sample.gene <- sel.del %>% 
+                          dplyr::filter(Chromosome == paste0("chr",genes.coordinates[gene.row,"Chromosome"]),
+                              Start_position <= genes.coordinates[gene.row,"start"] &
+                              End_position >= genes.coordinates[gene.row,"end"]) %>%
+                              pull(Case.ID) %>% unique()
+    #For all input samples get if those have Deletion or not
+    del.gene <- ifelse(unique(tcga.segs.t.id$Case.ID) %in% del.sample.gene, 1,0) 
+})
+row.names(mat.del.samples.genes) <- unique(tcga.segs.t.id$Case.ID)
+del.samples.genes <- as.data.frame(mat.del.samples.genes)
+del.samples.genes$sample <-  row.names(del.samples.genes)
+del.samples.genes
+```
+
+
+
+
+
+
+
+#Identification of tumors with promother hypermethylation in MHCII genes
+```{r}
+betafile <- "ByGene-methylation-values2.tsv"
+hypermethylation_cutoff <- 0.75
+
+methylation1.betas <- read.table(file=methylation1.file, sep="\t", header=TRUE)
+methylation1.betas <- methylation1.betas %>% select(-TSS_distance,
+                                                    -Chromosome, -Start, -End, -Gene_Symbol, -Gene_Type,
+                                                    -Transcript_ID, -Position_to_TSS, -CGI_Coordinate, 
+                                                    -Feature_Type)
+
+## Making short names for the samples, instead of this : "TCGA.61.2102.01A.01D.0667.05"; this "TCGA.61.2102"
+short.names <- sapply(colnames(methylation1.betas)[3:length(colnames(methylation1.betas))], function(x){
+                        samp <- paste(strsplit(x,'[.]')[[1]][c(1:3)], collapse = "-")
+})
+colnames(methylation1.betas)[3:length(colnames(methylation1.betas))] <-  short.names
+
+#Melting dataframe
+methylation1.df <- melt(methylation1.betas)
+colnames(methylation1.df)[3] <- "Sample"
+colnames(methylation1.df)[4] <- "Beta.value"
+
+
+###Getting average per gene
+mean.betas <- methylation1.df %>% group_by(Sample, input_gene) %>% 
+                     summarise(mean.val = mean(Beta.value, na.rm=TRUE)) %>% 
+                     pivot_wider(names_from = input_gene, values_from = mean.val) %>% as.data.frame()
+
+#To matrix, and then check in logical which values are above the threshold
+mt.mean.betas <- as.matrix(mean.betas[,-1])
+row.names(mt.mean.betas) <- mean.betas$Sample
+
+
+methylation.status <- mt.mean.betas >= hypermethylation_cutoff
+df.methylation.status <- as.data.frame(methylation.status)
+df.methylation.status$sample <-  mean.betas$Sample
+df.methylation.status
+```
+
+
+#Identification of tumors with promother hypermethylation in MHCII genes
+```{r}
+mut.files <- read.table(file=mutations.files, header = TRUE, sep=",")
+
+## Making short names for the samples, instead of this : "TCGA.61.2102.01A.01D.0667.05"; this "TCGA.61.2102"
+short.names <- sapply(mut.files$Tumor_Sample_Barcode, function(x){
+                        samp <- paste(strsplit(x,'[-]')[[1]][c(1:3)], collapse = "-")
+})
+mut.files$Tumor_Sample_Barcode <-  short.names
+
+#Getting the mut status according to conditions
+mut.status <- mut.files %>% mutate(Mut.status = if_else((IMPACT == "HIGH" |
+                                       (grepl("probably_damaging", PolyPhen) & grepl("deleterious", SIFT))),
+                                       "MUT", "NONE")) %>% 
+                            select(Tumor_Sample_Barcode, Hugo_Symbol, Mut.status)
+
+mt.mut.status <- mut.status %>% pivot_wider(names_from = Hugo_Symbol, values_from = Mut.status) 
+
+mt.mut.status[is.na(mt.mut.status)] <- "NONE"
+mut.status <- as.data.frame(mt.mut.status)
+
+#Adding to the column missing genes
+missing.genes <- setdiff(genes.interest, colnames(mut.status))
+for (i in missing.genes){
+  mut.status <- mut.status %>%  mutate({{i}} := "NONE")
+}
+mut.status
+```
+
+
+
+####Merging all the LOH, Mutation and hypermethylation status
+```{r}
+#Methylation
+df.methylation.status <- df.methylation.status %>% select(sample, everything())
+df.methylation.status[df.methylation.status == FALSE] <- 0
+df.methylation.status[is.na(df.methylation.status)] <- 0
+df.methylation.status[df.methylation.status == TRUE] <- 1
+melt.methylation <- melt(df.methylation.status)
+melt.methylation <- melt.methylation %>% mutate(value = ifelse(value == 1, "Prom.methylation", "0")) %>% 
+                                          filter(value == "Prom.methylation")
+
+#LOH
+LOH.samples.genes <- LOH.samples.genes %>% select(sample, everything())
+melt.LOH <- melt(LOH.samples.genes)
+melt.LOH <- melt.LOH %>%  mutate(value = ifelse(value == 1, "LOH", "0")) %>% 
+                                          filter(value == "LOH")
+
+
+#Deletion
+del.samples.genes <- del.samples.genes %>% select(sample, everything())
+melt.del <- melt(del.samples.genes)
+melt.del <- melt.del %>%  mutate(value = ifelse(value == 1, "DEL", "0")) %>% 
+                                          filter(value == "DEL")
+
+#Mutation
+mut.status[mut.status == "NONE"] <- 0
+mut.status[mut.status == "MUT"] <- 1
+
+melt.mut <- melt(mut.status, id.vars = "Tumor_Sample_Barcode")
+melt.mut <- melt.mut %>%  mutate(value = ifelse(value == 1, "MUT", "0")) %>% 
+                                          filter(value == "MUT")
+colnames(melt.mut)[1] <- "sample"
+
+gene.status <- rbind(melt.methylation, melt.LOH, melt.del, melt.mut)
+write.table(gene.status, file="D:/users/fperez/NKI_TMAs_AF/TCGA_methylation_mutations_loh/Intermediate_files/Status_MHCII_genes.txt", sep="\t", row.names = FALSE)
+```
+
