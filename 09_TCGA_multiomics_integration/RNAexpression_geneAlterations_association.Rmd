@@ -1,0 +1,152 @@
+---
+title: "Association deletion with expression"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(EnvStats)
+```
+
+#Reading multiomics status
+```{r}
+multi.omics.file <- "D:/users/fperez/NKI_TMAs_AF/TCGA_methylation_mutations_loh/Intermediate_files/Status_MHCII_genes.txt"
+multiomics.status <- read.table(file = multi.omics.file, sep="\t", header=TRUE)
+```
+
+
+
+#Reading input RNA deconvolution files
+```{r}
+input.folder <- "D:/users/fperez/NKI_TMAs_AF/TCGA_PRISM_RNAdeconvolution/"
+
+g <- read.table(file=paste0(input.folder,"G.tsv"),  header = TRUE)
+z <- read.table(file=paste0(input.folder,"Z.tsv"), header = TRUE)
+w <- read.table(file=paste0(input.folder,"W.tsv"), header = TRUE)
+```
+
+
+
+#Reading HRD status shared in Perez-Villatoro et al 2022 and clinical data from TCGA
+```{r}
+clin.dat <- read.csv(file = paste0(input.folder,"TCGA-CDR-SupplementalTableS1_stage-survival.csv"),
+                      header = TRUE, row.names = 1)
+
+out.put.folder <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/05_ML_validations/TCGA_RNA/"
+dir.create(out.put.folder)
+
+HRD.tab <- read.table(file=paste0(input.folder,"Categories_Konstantinopoulos_HR_HGSC_germline.csv"),
+                      sep=",", header=TRUE)
+
+
+#Stratify samples according to tumoral molecular profiles
+HRD.tab$Molecular.profile <- "HRP"
+HRD.tab$Molecular.profile[HRD.tab$categories == "CCNE1 amplification"] <- "CCNE1amp"
+HRD.tab$Molecular.profile[HRD.tab$HRDsum >= 54] <- "HRD"
+HRD.tab$Molecular.profile[grep("BRCA", HRD.tab$categories)] <- "BRCAloss"
+HRD.tab.cat <- HRD.tab[,c("Sample","Molecular.profile")]
+
+# Structuring clinical data
+clin.dat <- clin.dat[clin.dat$type == "OV",]
+clin.dat$PFI.time <- as.numeric(clin.dat$PFI.time)/30.4
+clin.dat$OS.time <- as.numeric(clin.dat$OS.time)/30.4
+clin.dat$OS <- as.numeric(clin.dat$OS)
+clin.dat$PFI <- as.numeric(clin.dat$PFI)
+clin.dat$age <- as.numeric(clin.dat$age_at_initial_pathologic_diagnosis)
+
+clin.dat$age.bin <- NA
+clin.dat$age.bin[clin.dat$age < 40] = 0
+clin.dat$age.bin[clin.dat$age >= 40 & clin.dat$age < 50] = 1
+clin.dat$age.bin[clin.dat$age >= 50 & clin.dat$age < 60] = 2
+clin.dat$age.bin[clin.dat$age >= 60 & clin.dat$age < 70] = 3
+clin.dat$age.bin[clin.dat$age >= 70 & clin.dat$age < 80] = 4
+clin.dat$age.bin[clin.dat$age >= 80] = 5
+
+#Selecting only high patients with high grade tumors 
+clin.dat <- clin.dat[clin.dat$histological_grade %in% c("G3","G4"),]
+
+#Ignoring low clinical stages
+clin.dat <- clin.dat[!clin.dat$clinical_stage %in% c("[Not Available]", "Stage IA","Stage IB", "Stage IC",
+                                                         "Stage IIA","Stage IIB","Stage IIC"),]
+clin.dat
+```
+
+
+
+#Normalizing data according to PRISM developers
+```{r}
+w.dat <- as.matrix(w[,-1])
+rownames(w.dat) <- gsub("-","\\.", w[,1])
+z.dat <- as.matrix(z[,-c(1,2)])
+
+deconv <- t( t(z.dat) / c(t(c(as.matrix(g)) * w.dat )))
+deconv <- as.data.frame(deconv)
+
+deconv$symbol <- z$symbol
+
+deconv <- deconv %>% select(symbol, everything())
+
+deconv[1:5,1:5]
+```
+
+
+
+
+#Selecting HLA genes and organizing data table
+```{r}
+hla.deconv <- deconv
+hla.deconv <- deconv %>% filter(grepl("HLA",symbol ) | grepl("CD74",symbol ))
+
+#Selecting the expression columns that comes from Epithelial Ovarian Cancer
+hla.eoc <- hla.deconv[,c(1,grep("EOC", colnames(hla.deconv)))]
+hla.genes <- hla.eoc$symbol
+hla.eoc <- as.data.frame(t(hla.eoc[,-1]))
+colnames(hla.eoc) <- gsub("-","_", hla.genes)
+
+#Selecting those samples taken in primary setting
+setting <-sapply(row.names(hla.eoc), function(x){strsplit(x, "[.]")[[1]][4]})
+hla.eoc.p  <- hla.eoc[grepl("01", setting),]
+
+#Selecting those samples taken in recurrence setting
+hla.eoc.r  <- hla.eoc[grep("02", setting),]
+
+
+#Making shorter names from TCGA.04.1348.01A.01R.1565.13..EOC to TCGA.04.1348
+names.short.p <- sapply(row.names(hla.eoc.p), function(x){
+                  paste(strsplit(x, "[.]")[[1]][1:3], collapse = "-")})
+
+row.names(hla.eoc.p) <- names.short.p
+hla.eoc.p
+```
+
+
+#Merging expression with multiomics status
+```{r}
+hla.eoc.p$sample <- row.names(hla.eoc.p)
+hla.eoc.set <- hla.eoc.p %>% select(sample, "HLA_DPB1")
+HLA.DPB1.status <- multiomics.status %>% filter(variable=="HLA-DPB1") %>% select(-variable)
+
+#Next line can cause errors if there are samples with more than one type of alteration
+status.HLA.DPB1.expression <- merge(hla.eoc.set, HLA.DPB1.status, all.x = TRUE)
+
+colnames(status.HLA.DPB1.expression)[3] <- "Status"
+status.HLA.DPB1.expression$Status[is.na(status.HLA.DPB1.expression$Status)] <- "None"
+status.HLA.DPB1.expression[status.HLA.DPB1.expression$Status == "MUT","Status"] <- "ALT"
+status.HLA.DPB1.expression[status.HLA.DPB1.expression$Status == "LOH","Status"] <- "ALT"
+
+status.HLA.DPB1.expression$Status <- factor(status.HLA.DPB1.expression$Status, levels=c("None","ALT"))
+
+wilcox.test(status.HLA.DPB1.expression[status.HLA.DPB1.expression$Status == "ALT", "HLA_DPB1"],
+            status.HLA.DPB1.expression[status.HLA.DPB1.expression$Status == "None", "HLA_DPB1"])
+```
+
+##Plotting the results
+```{r}
+ggplot(status.HLA.DPB1.expression, aes(x=Status,y=HLA_DPB1)) + 
+       geom_violin(fill=NA) +
+       geom_boxplot() + stat_n_text() +
+       xlab("Alteration") + ylab("HLA_DPB1 deconvoluted expression EOC") +
+       theme_bw()
+     
+```
+
