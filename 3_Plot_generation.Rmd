@@ -1,0 +1,186 @@
+---
+title: "Visualization"
+author: "Gayani Anandagoda"
+date: "`r Sys.Date()`"
+output: html_document
+params: 
+  treatment: "default"
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load packages, message=FALSE}
+library(Seurat)
+library(SeuratObject)
+library(SingleCellExperiment)
+library(dplyr)
+library(ggplot2)
+
+library(nichenetr)
+library(multinichenetr)
+```
+
+
+```{r  directory}
+treatment = params$treatment
+
+
+#  define directory
+output_dir = "/run/user/1356082/gvfs/smb-share:server=group3.ad.helsinki.fi,share=h345/afarkkilab/Projects/NKI/Single_Cell_LR_Annalysis/output/"
+
+
+
+file_name_prioritization_tables = paste0(output_dir,"prioritization_tables_",treatment,".RDS") # file name
+
+prioritization_tables = readRDS(file_name_prioritization_tables)
+
+```
+
+```{r load lr networks}
+organism = "human"
+options(timeout = 120)
+
+if(organism == "human"){
+  
+  lr_network_all = 
+    readRDS(url(
+      "https://zenodo.org/record/10229222/files/lr_network_human_allInfo_30112033.rds"
+      )) %>% 
+    mutate(
+      ligand = convert_alias_to_symbols(ligand, organism = organism), 
+      receptor = convert_alias_to_symbols(receptor, organism = organism))
+  
+  lr_network_all = lr_network_all  %>% 
+    mutate(ligand = make.names(ligand), receptor = make.names(receptor)) 
+  
+  lr_network = lr_network_all %>% 
+    distinct(ligand, receptor)
+  
+  ligand_target_matrix = readRDS(url(
+    "https://zenodo.org/record/7074291/files/ligand_target_matrix_nsga2r_final.rds"
+    ))
+  
+  colnames(ligand_target_matrix) = colnames(ligand_target_matrix) %>% 
+    convert_alias_to_symbols(organism = organism) %>% make.names()
+  rownames(ligand_target_matrix) = rownames(ligand_target_matrix) %>% 
+    convert_alias_to_symbols(organism = organism) %>% make.names()
+  
+  lr_network = lr_network %>% filter(ligand %in% colnames(ligand_target_matrix))
+  ligand_target_matrix = ligand_target_matrix[, lr_network$ligand %>% unique()]
+  
+} else if(organism == "mouse"){
+  
+  lr_network_all = readRDS(url(
+    "https://zenodo.org/record/10229222/files/lr_network_mouse_allInfo_30112033.rds"
+    )) %>% 
+    mutate(
+      ligand = convert_alias_to_symbols(ligand, organism = organism), 
+      receptor = convert_alias_to_symbols(receptor, organism = organism))
+  
+  lr_network_all = lr_network_all  %>% 
+    mutate(ligand = make.names(ligand), receptor = make.names(receptor)) 
+  lr_network = lr_network_all %>% 
+    distinct(ligand, receptor)
+  
+  ligand_target_matrix = readRDS(url(
+    "https://zenodo.org/record/7074291/files/ligand_target_matrix_nsga2r_final_mouse.rds"
+    ))
+  
+  colnames(ligand_target_matrix) = colnames(ligand_target_matrix) %>% 
+    convert_alias_to_symbols(organism = organism) %>% make.names()
+  rownames(ligand_target_matrix) = rownames(ligand_target_matrix) %>% 
+    convert_alias_to_symbols(organism = organism) %>% make.names()
+  
+  lr_network = lr_network %>% filter(ligand %in% colnames(ligand_target_matrix))
+  ligand_target_matrix = ligand_target_matrix[, lr_network$ligand %>% unique()]
+  
+}
+
+```
+
+### # Create circos plots
+
+```{r circos plots}
+prioritized_tbl_oi_all <- get_top_n_lr_pairs(prioritization_tables, 50, rank_per_group = TRUE)
+
+prioritized_tbl_oi <- prioritization_tables$group_prioritization_tbl %>%
+  filter(id %in% prioritized_tbl_oi_all$id) %>%
+  distinct(id, sender, receiver, ligand, receptor, group) %>% left_join(prioritized_tbl_oi_all)
+
+# Set NA values to zero
+prioritized_tbl_oi$prioritization_score[is.na(prioritized_tbl_oi$prioritization_score)] <- 0
+
+# Define sender and receiver cells
+senders_receivers <- union(prioritized_tbl_oi$sender %>% unique(), prioritized_tbl_oi$receiver %>% unique()) %>% sort()
+
+# Set colors for sender and receiver cells
+colors_sender <- RColorBrewer::brewer.pal(n = length(senders_receivers), name = 'Spectral') %>% magrittr::set_names(senders_receivers)
+colors_receiver <- RColorBrewer::brewer.pal(n = length(senders_receivers), name = 'Spectral') %>% magrittr::set_names(senders_receivers)
+
+# Create circos plots to visualize top 50 predictions across all contrasts, senders, and receivers of interest
+circos_list <- make_circos_group_comparison(prioritized_tbl_oi, colors_sender, colors_receiver)
+
+file_name_circos_plot_lr_interactions_MHCII_Low_allpairs = paste0(output_dir,"plots/circos_plot_lr_interactions_MHCII_Low_allpairs_",treatment,".pdf") # file name
+pdf(file = file_name_circos_plot_lr_interactions_MHCII_Low_allpairs, width = 10, height = 10)
+circos_list$Low
+dev.off()
+
+file_name_circos_plot_lr_interactions_MHCII_High_allpairs = paste0(output_dir,"plots/circos_plot_lr_interactions_MHCII_High_allpairs_",treatment,".pdf") # file name
+
+pdf(file = file_name_circos_plot_lr_interactions_MHCII_High_allpairs, width = 10, height = 10)
+circos_list$High
+dev.off()
+
+
+file_name_circos_plot_lr_interactions_legend = paste0(output_dir,"plots/circos_plot_lr_interactions_legend_",treatment,".pdf") # file name
+pdf(file = file_name_circos_plot_lr_interactions_legend, width = 10, height = 10)
+circos_list$legend
+dev.off()
+```
+
+
+
+########### Generating bubble plots
+
+```{r bubble plots , width = 10, height = 10}
+group_oi = "High"
+
+prioritized_tbl_oi_M_50 = prioritized_tbl_oi_all %>% 
+  filter(group == group_oi)
+
+plot_oi = make_sample_lr_prod_activity_plots_Omnipath(
+  prioritization_tables, 
+  prioritized_tbl_oi_M_50 %>% inner_join(lr_network_all)
+  )
+
+file_name_bubble_plot_lr_interactions_High = paste0(output_dir,"plots/bubble_plot_lr_interactions_MHCII__High_",treatment,".pdf") # file name
+
+pdf(file = file_name_bubble_plot_lr_interactions_High, width = 17, height = 10)
+plot_oi
+dev.off()
+
+
+
+group_oi = "Low"
+
+prioritized_tbl_oi_M_50 = prioritized_tbl_oi_all %>% 
+  filter(group == group_oi)
+
+plot_oi = make_sample_lr_prod_activity_plots_Omnipath(
+  prioritization_tables, 
+  prioritized_tbl_oi_M_50 %>% inner_join(lr_network_all)
+  )
+
+file_name_bubble_plot_lr_interactions_MHCII_low = paste0(output_dir,"plots/bubble_plot_lr_interactions_MHCII_low_",treatment,".pdf") # file name
+
+pdf(file = file_name_bubble_plot_lr_interactions_MHCII_low, width = 17, height = 10)
+plot_oi
+dev.off()
+```
+
+
+
+
