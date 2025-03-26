@@ -8,6 +8,9 @@ params:
   cell_idents: ["default"]
   batches: "default"
   covariates: "default"
+  input_dir: "default"
+  seurate_obj_name: "default"
+  output_dir: "default"
   
 ---
 
@@ -34,8 +37,11 @@ library(multinichenetr)
 # This Seurat object is the final output from the Data_preprocessing.Rmd script
 # This Seurat object contains samples only with MHCII expression levels High and Low
 # cell types also have been edited and available as "edited_cell_type" in meta data
-
-filtered_scRNA_obj_all = readRDS("/run/user/1356082/gvfs/smb-share:server=group3.ad.helsinki.fi,share=h345/afarkkilab/Projects/NKI/Single_Cell_LR_Annalysis/Input/launonen_cancercell_allcells_allannot_Filtered_MHCII_HIgh_and_low.RDS")
+ 
+input_dir = params$input_dir
+seurate_obj_name = params$seurate_obj_name
+file_name = paste0(input_dir,seurate_obj_name) # file name
+filtered_scRNA_obj_all = readRDS(file_name)
 
 ```
 
@@ -90,7 +96,8 @@ contrast_tbl <- tibble(contrast = c("High-Low","Low-High"),
 
 ```{r output directory}
 #  define directory
-output_dir = "/run/user/1356082/gvfs/smb-share:server=group3.ad.helsinki.fi,share=h345/afarkkilab/Projects/NKI/Single_Cell_LR_Annalysis/output/"
+#  define directory
+output_dir = params$output_dir
 
 ```
 
@@ -390,7 +397,7 @@ ligand_activities_targets_DEgenes$ligand_activities %>% head(5)
 
 
 ```{r saveRDS}
-file_name_ligand_activities = paste0(output_dir,"ligand_activities_targets_DEgenes_",treatment,".RDS") # file name
+file_name_ligand_activities = paste0(output_dir,"ligand_activities_targets_DEgenes_all_cell_types_",treatment,".RDS") # file name
 
 saveRDS(ligand_activities_targets_DEgenes, file = file_name_ligand_activities )
 ```
