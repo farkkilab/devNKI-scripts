@@ -27,7 +27,7 @@ Main output files:
   file with cell type fractions per each AOI computed by BayesPrism
 * **ssgsea/_CONDITIONS.csv** (name will change based on the parameters used) - ssGSEA/GSVA scores of provided signatures per each AOI (for full and/or deconvoluted data)
 
-### pipeline steps:
+#### pipeline steps:
 
 1. Script: geomx_qc.R
     * filtering AOIs based on basic QC parameters (nr of aligned reads, hight negative control counts)
