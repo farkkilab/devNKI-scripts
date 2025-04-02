@@ -10,7 +10,7 @@ Scripts used for analysis of GeoMX data.
 
 
 
-### Script: geomx_master.R
+### geomx_master.R
 This script runs the geomx_processing pipeline and performs pre-processing and analysis steps described below:
 
 Input files:
