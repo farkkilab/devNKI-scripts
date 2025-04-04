@@ -7,6 +7,6 @@ Scripts used to plotting cell types proportions by Molecular Profiles, performin
 
 ## List of files
 
-- Survival_cell_proportions.Rmd: Main script used for calculation of results.
+- Survival_cell_proportions.Rmd: Main script used for calculation of results for cell proportions per M profile. This script was used to create the Supplementary Figures 2a to 2f
 
 
