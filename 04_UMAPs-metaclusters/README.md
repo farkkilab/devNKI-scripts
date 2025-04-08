@@ -1,4 +1,4 @@
-# 4_UMAPs-metaclusters - Scripts used to produce stromal cancer metaclusters
+# 4_UMAPs-metaclusters - Scripts used to produce cancer metaclusters
 
 ## Description of files
 
