@@ -2,5 +2,5 @@
 
 ## Description of files
 
-- Cancer_Stromal_cluster_analysis.rmd : Original script used to produce the metaclusters and heatmaps in article, Figure 1k and 1l. Also to generate the cell mask for Image screenshots in Supplementary Figure 1e. 
-- Cancer_clustering_analysis.rmd : Additional script uses to produce the UMAPs in the article
+- Cancer_clustering_analysis.rmd : Script to produce the cancer meta-clusters of cancer cells. Script to produce Figure 1k and Figure 1l.
+- Metacluster-propotions.Rmd : Script to generate comparision of meta-cluster proportions by molecular profule and using survival analysis.
