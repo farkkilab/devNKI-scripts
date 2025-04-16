@@ -17,4 +17,4 @@ Scripts used to create Recurrent Cellular neighboorhoods (RNC), explore the resu
 
 - **Find_neighboors_of_cancer_cells.ipynb*** - Script to get a list of neighboors of cancer cells, for calculating later expression of relevant functional markers of cancer cells neighboors.
 
-- **Scimap_spatial_analysis_clean.ipynb** - Script to calculate the RCNs used in the manuscript, using different metrics. 
+- **Scimap_spatial_analysis_clean.ipynb** - Script to calculate the RCNs used in the manuscript, using different metrics (46px, 92px, 138px). 
