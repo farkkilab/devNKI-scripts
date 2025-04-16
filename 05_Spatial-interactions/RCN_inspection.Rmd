@@ -13,7 +13,7 @@ library(paletteer)
 library(vegan)
 library(circlize)
 
-source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/5_Spatial-interactions/RCN_inspection_functions.R")
+source("D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/05_Spatial-interactions/RCN_inspection_functions.R")
 ```
 
 #Reading clinical info
@@ -22,19 +22,19 @@ rcn.folder <- "Analysis_results/03_RCN/"
 input.prefix <- "Cluster_ids_metaclustersmerged_"
 project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
 output.napari <- "RCN_Napary2023_2"
-out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN/"
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN_2024/"
 method.rcn <- "radious46_k30"
 
 
-cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/3_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
-clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.csv", sep=",", header = TRUE)
+cycif2samples <- read.table(file="D:/users/fperez/NKI_TMAs_AF/devNKI-scripts/03_Cell-typeClassification/tCicyf_patients-cores_pass.csv", sep=",", header = TRUE)
+clinical.info <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Clinical_data/T-CycIF.updated.csv", sep=",",
+                            header = TRUE)
 
 clin.tcycif <- merge(cycif2samples, clinical.info, by.x="patient", by.y="TnumberAVL")
 
-#Merging clinical data with shallowHRD
-shallowHRDresults <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/shallowHRD_summary_table.csv", header=TRUE, sep=",")
-
-IDs <- read.table(file="D:/users/fperez/NKI_TMAs_AF/shallowHRDinspection/sample_names_sWGS.csv", sep=",", header=TRUE)
+#Loading Molecular profiles
+M.profiles <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/Molecular_profiles_patients_20231208.csv",
+             sep=",", header = TRUE)
 
 #List of cores to get RNC data in Napari format
 cores.interest <- c(24,28,31,109,110,112,113,114,116,118,120,122,10,11,111,113,115,117,119,121,141)
@@ -42,31 +42,77 @@ cores.interest <- sort(cores.interest)
 cores.interest <- paste0("core",cores.interest)
 ```
 
+
+#Merging M.profile info with tCycif core ID
+```{r}
+M.profiles.clin  <- merge(M.profiles, cycif2samples, by="patient", all.x=TRUE)
+M.profiles.clin$imageid <- paste(M.profiles.clin$cycif.slide, M.profiles.clin$cycif.core.id, sep="_")
+M.profiles.clin <- M.profiles.clin %>% select(patient,Molecular.profile2,therapy_sequence,imageid)
+M.profiles.clin
+```
+
+
+
+```{r}
+length(unique(M.profiles.clin$patient))
+```
+
+
+
 #Reading input RCN table file
 ```{r}
-RCN.clusters <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/Spatial_analysis/Cluster_ids_radious46_k30.csv", header = TRUE, sep=",")
+#Reading RCN id per cell
+RCN.clusters <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/Spatial_analysis/Cluster_ids_radius46_k40_metaclusters_20240113.csv", header = TRUE, sep=",")
 
-#Reading names for merged RCNs
-RCN.annotations <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN/Merge_RCNs.csv",
+#Next lines to rename the RNC id according to the abundance. So, RCN=1 would be the most abundant 
+RCN.order <- order(table(RCN.clusters[,2]), decreasing = TRUE)
+RCN.order.values <- sapply(1:length(RCN.order), function(x){which(RCN.order == x)})
+RCN.clusters[,2] <- RCN.order.values[c(RCN.clusters[,2] + 1)]
+
+#Reading the merged RCNs ids
+RCN.annotations <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN_2024_metaclusters/Merged_RCNs.csv",
                               sep=",",header=TRUE)
 
-RCN.c.ids <- paste0("RCN", sprintf('%0.2d',1:length(unique(RCN.annotations$RCN_name))),"c")
+#Adding an RCNid number of the merged RCNs
+RCN.c.ids <- paste0("RCN", sprintf('%0.2d',1:length(unique(RCN.annotations$RCN_name))))
 names(RCN.c.ids) <- unique(RCN.annotations$RCN_name)
 
 RCN.c.ids.all <- sapply(RCN.annotations$RCN_name, function(x){
-  RCN.c.ids[which(x == names(RCN.c.ids))]
+      RCN.c.ids[which(x == names(RCN.c.ids))]
 })
 
 RCN.annotations$RCN.id.collapsed <- RCN.c.ids.all
-
 RCN.annotations$RCN_id <- as.integer(gsub("RCN","",RCN.annotations$RCN_id))
-unique(RCN.annotations$RCN_name)
+
+
+#Next lines to rename the RNC id according to the abundance. So, RCN=1 would be the most abundant 
+RCN.order <- order(table(RCN.annotations[RCN.clusters$spatial_kmeans,"RCN.id.collapsed"]), decreasing = TRUE)
+new.rcn.order <- paste0("RCN", sprintf('%0.2d',1:length(unique(RCN.annotations$RCN.id.collapsed))))
+names(new.rcn.order) <- unique(RCN.annotations$RCN.id.collapsed)[RCN.order]
+
+RCN.annotations$RCN.id.collapsed.ordered <- new.rcn.order[RCN.annotations$RCN.id.collapsed]
+RCN.annotations
+```
+
+##Re-naming the RCN accordint to the RNC group they belong
+```{r}
+#New names
+new.vals <- c("RCN01", "RCN02", "RCN03","RCN04", "RCN05", "RCN06","RCN07", "RCN08", "RCN09","RCN10",
+          "RCN11", "RCN12", "RCN13", "RCN14")
+
+#Original names, with the order according to the groups
+order <- c("RCN01", "RCN03", "RCN11", "RCN02", "RCN05", "RCN06", "RCN09", "RCN12", "RCN04", "RCN07",
+               "RCN08", "RCN10", "RCN13", "RCN14")
+
+names(new.vals) <- order
+RCN.annotations$RCN.id.collapsed.ordered <- new.vals[RCN.annotations$RCN.id.collapsed.ordered]
 ```
 
 
 #Reading input cell dataset
 ```{r}
-cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_scimap-format.csv", header = TRUE, sep=",")
+cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_subtype_scimap-format1_20231129.csv",
+                    header = TRUE, sep=",")
 ```
 
 
@@ -74,84 +120,44 @@ cells <- read.table(file="D:/users/fperez/NKI_TMAs_AF/Tables/All_cells_scimap-fo
 ```{r}
 cells.aux <- cells
 
-cycif.slide.id <- sapply(cells$imageid, function(x){
+cells.aux$cycif.slide  <- sapply(cells$imageid, function(x){
                       splitted <- strsplit(x,"_")[[1]]
                       concat <- paste(splitted[1],splitted[2],splitted[3], sep="_")
                       return(concat)
                     })
 
-cycif.core <- sapply(cells$imageid, function(x){
+cells.aux$cycif.core.id <- sapply(cells$imageid, function(x){
                       splitted <- strsplit(x,"_")[[1]]
                       return(splitted[4])
                     })
-
-cells.aux$cycif.slide   <-  cycif.slide.id
-cells.aux$cycif.core.id <- cycif.core
 ```
 
-#Merging cells ids with patient.id 
+#Merging global-celltype values
 ```{r}
-cells.pat <- merge(cells.aux, cycif2samples, by=c("cycif.slide","cycif.core.id"))
+cells.aux$GlobalCellType[grep("Stromal", cells.aux$GlobalCellType)] = "Stromal"
+cells.aux$GlobalCellType[grep("CancerClus1", cells.aux$GlobalCellType)] = "Can.Idle"
+cells.aux$GlobalCellType[grep("CancerClus2", cells.aux$GlobalCellType)] = "Can.Proliferative"
+cells.aux$GlobalCellType[grep("CancerClus3", cells.aux$GlobalCellType)] = "Can.EMT"
+cells.aux$GlobalCellType[grep("CancerClus4", cells.aux$GlobalCellType)] = "Can.Immunogenic"
 ```
 
 #Merging cells ids with clinical info
 ```{r}
+#Merging cells ids with patient.id 
+cells.pat <- merge(cells.aux, cycif2samples, by=c("cycif.slide","cycif.core.id"))
+
+#Merging cells ids with clinical info
 cells.clin <- merge(cells.pat, clinical.info, by.x="patient", by.y="TnumberAVL")
 ```
-
-
-#Merging clinical info with shallowHRD
-```{r}
-colnames(shallowHRDresults)[3] <- "ShallowHRDcall"
-
-IDs$CF.ID.number <- as.numeric(sub("X","", IDs$CF.ID.number))
-clindata.swgs <- merge(clin.tcycif, IDs, by.x="CFsample", by.y="Description", all.x = TRUE)
-clindata.shrd <- merge(clindata.swgs, shallowHRDresults, by.x="CF.ID.number", by.y="Sample", all.x = TRUE)
-
-
-BRCAsamples <- clindata.shrd[clindata.shrd$BRCA_methylation == "BRCA hypermethylation" | grepl("BRCA", clindata.shrd$BRCA_mutation),"patient"]
-
-CCNE1amp <- clindata.shrd[clindata.shrd$CCNE1_revised == "Amplification", "patient"]
-
-HRDshallow <- clindata.shrd[which(clindata.shrd$ShallowHRDcall == "positive"),"patient"]
-HRPshallow <- clindata.shrd[which(clindata.shrd$ShallowHRDcall == "borderline" | clindata.shrd$ShallowHRDcall == "negative"),"patient"]
-
-BRCAnessPos <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "BRCAness mutation"),"patient"]
-BRCAnessNeg <- clindata.shrd[which(clindata.shrd$BRCAness_ovarium == "No BRCAness mutation"),"patient"]
-
-
-clindata.shrd$Molecular.profile2 <- rep("Other",  nrow(clindata.shrd))
-
-clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "HRD"
-clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "HRP"
-#clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "BRCAness+sHRD-"
-#clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "BRCAness-sHRD+"
-
-clindata.shrd[which(clindata.shrd$patient %in% HRPshallow & clindata.shrd$patient %in% BRCAnessPos), "Molecular.profile2"] <- "Other"
-clindata.shrd[which(clindata.shrd$patient %in% HRDshallow & clindata.shrd$patient %in% BRCAnessNeg), "Molecular.profile2"] <- "Other"
-
-
-
-clindata.shrd[which(clindata.shrd$patient %in% CCNE1amp), "Molecular.profile2"] <- "CCNE1amp"
-clindata.shrd[which(clindata.shrd$patient %in% BRCAsamples), "Molecular.profile2"] <- "BRCAmut/met"
-
-clindata.shrd[which(clindata.shrd$QC_BRCA_CCNE == 1), "Molecular.profile2"] <- "Other"
-
-
-clindata.shrd$imageid <- paste0(clindata.shrd$cycif.slide, "_", clindata.shrd$cycif.core.id)
-```
-
-
 
 #Loop for barplots of RNC using different criteria
 ```{r}
 method.rcn <- "radious46_k30"
 
-cells.aux$rcn_id <- paste0("RCN",RCN.clusters$spatial_kmeans)
+cells.aux$rcn_id <- paste0("RCN",RCN.clusters[,2])
 n.clust <- length(unique(cells.aux$rcn_id))
-n.clust <- n.clust-1
 cells.aux$rcn_id <- factor(cells.aux$rcn_id,
-                       levels=paste0("RCN",0:n.clust))
+                       levels=paste0("RCN",1:n.clust))
 ################################################
 #Exporting data for visualization in Napari
 for (slide in unique(cells.aux$cycif.slide)){
@@ -179,32 +185,17 @@ for (slide in unique(cells.aux$cycif.slide)){
                 sep=",", row.names = FALSE)
   }
 }
-# ###########################################
-# #Plotting barplot for abundance of clusters
-# barplot.rcn(cells.aux, method=method.rcn)
-# 
-# ###########################################
-# #Plotting heatmap annotations with diversity and abundance of clusters
-# heatmap.diversity(cells.aux, method=method.rcn)
-# 
-# #cells.aux2 <- cells.aux[cells.aux$patient %in% pt.sel.prop.cancer.pt,] #Selecting cores with at least 10% of cancer cells
-# 
-# ###########################################
-# #Plotting heatmap annotations with diversity and abundance of clusters
-# heatmaps(cells.aux, method=method.rcn)
-
 ```
 
 
 ```{r}
 cells.aux %>% group_by(imageid,rcn_id) %>%
-    summarise(N=n()) %>% mutate(Proportion= N * 100 /sum(N)) %>% dplyr::filter(rcn_id=="RCN16") %>%
+    summarise(N=n()) %>% mutate(Proportion= N * 100 /sum(N)) %>% dplyr::filter(rcn_id=="RCN10c") %>%
     arrange(desc(Proportion))
 ```
 
 #Identifying those patients with really low amount of cancer cells or super high amount of cancer cells
 ```{r}
-
 cores.cancer.prop <- cells.aux %>% group_by(imageid, GlobalCellType) %>% 
   summarise(N=n()) %>% mutate(Proportion= N * 100 /sum(N)) %>% dplyr::filter(GlobalCellType=="Cancer") %>%
   arrange(desc(Proportion))
@@ -224,27 +215,70 @@ high.stromal <- cores.stromal.prop$imageid[which(cores.stromal.prop$Proportion >
 
 #Loop for barplots of RNC after merging  using different criteria
 ```{r}
-cells.aux$rcn_id <- RCN.annotations[c(RCN.clusters$spatial_kmeans + 1),"RCN.id.collapsed"]
-cells.aux$rcn_id <- factor(cells.aux$rcn_id)
-
-rcn.folder <- "Analysis_results/03_RCN/"
+rcn.folder <- "Analysis_results/03_RCN_2024_metaclusters/"
 input.prefix <- "Cluster_ids_metaclustersmerged_"
 project.folder <- "D:/users/fperez/NKI_TMAs_AF/"
-output.napari <- "RCN_Napary2023"
-out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN/"
-method.rcn <- "radious46_k30_merged"
+output.napari <- "RCN_Napari2024"
+out.folder.name <- "D:/users/fperez/NKI_TMAs_AF/Analysis_results/03_RCN_2024_metaclusters/"
+method.rcn <- "radius46_k30_merged"
+
+# # #Order of RCN for plotting
+RNC.order <- c("RCN01", "RCN02", "RCN03", "RCN04","RCN05","RCN06", "RCN07","RCN08", "RCN09", "RCN10",
+                  "RCN11", "RCN12", "RCN13", "RCN14")
+
+#Adding the merged RCNid to the cells
+cells.aux$rcn_id <- RCN.annotations[RCN.clusters$spatial_kmeans,"RCN.id.collapsed.ordered"]
+cells.aux$rcn_id <- factor(cells.aux$rcn_id, levels = rev(RNC.order))
 
 
-################################################
+# This code was used to ignore some samples for some of the first heatmaps created not used in publication
+# #Ignoring cores with high amount of cancer or stromal
+# cells.aux.clin2 <- cells.aux.clin[!(cells.aux.clin$imageid %in% high.cancer |
+#                                       cells.aux.clin$imageid %in% high.stromal),]
+# 
+# #Ignoring patients with only one core
+# patient.cores.nums <- cells.aux.clin2 %>% group_by(patient, imageid) %>%
+#   summarise(N.cores=length(unique(imageid))) %>%
+#   summarise(N.cores2=sum(N.cores))
+# 
+# patients.low.num.cores <- patient.cores.nums$patient[which(patient.cores.nums$N.cores2 < 2)]
+# cells.aux.clin2 <- cells.aux.clin2[!cells.aux.clin2$patient %in% patients.low.num.cores,]
+# 
+# #Additionally ignore those patients with total amount of cancer cells very low
+# tot.prop.cancer <- cells.aux.clin2 %>% group_by(patient, GlobalCellType) %>%
+#                       summarise(N=n()) %>% mutate(Proportion = N * 100 /sum(N)) %>%
+#                       dplyr::filter(GlobalCellType=="Cancer") %>% arrange(Proportion)
+# 
+# patients.low.cancer <- tot.prop.cancer$patient[which(tot.prop.cancer$Proportion < 10)]
+# cells.aux.clin2 <- cells.aux.clin2[!cells.aux.clin2$patient %in% patients.low.cancer,]
+# 
+# #Ignoring RCN01c and RCN02c
+# cells.aux.clin2 <- cells.aux.clin2[!cells.aux.clin2$rcn_id %in% c("RCN01c","RCN02c"),]
+# 
+
+
+# ###########################################
+#Plotting barplot for abundance of clusters
+barplot.rcn(cells.aux, method=method.rcn)
+
+###########################################
+#Plotting heatmap annotations with diversity and abundance of clusters
+heatmap.diversity(cells.aux, method=method.rcn)
+
+cells.aux.clin <- merge(cells.aux, M.profiles.clin, by="imageid", all.x = TRUE)
+
+# ###########################################
+# #Plotting heatmap annotations with diversity and abundance of clusters
+heatmaps(cells.aux.clin, method=method.rcn)
+```
+
+
+```{r}
+###############################################
 #Exporting data for visualization in Napari
 for (slide in unique(cells.aux$cycif.slide)[c(1:4,10)]){
-  # sel.cell <- cells.aux %>%
-  #             filter(cycif.slide == slide, cycif.core.id %in% cores.interest) %>%
-  #             arrange(cycif.core.id, CellId)
-  sel.cell <- cells.aux %>%
-               filter(cycif.slide == slide) %>% arrange(cycif.core.id, CellId)
-              #filter(cycif.slide == slide, cycif.core.id %in% cores.interest) %>%
-              #
+   sel.cell <- cells.aux %>%
+               dplyr::filter(cycif.slide == slide) %>% arrange(cycif.core.id, CellId)
 
   outout.folder.name <- paste0(project.folder, "/", slide, "/", output.napari, "_",method.rcn)
   dir.create(outout.folder.name)
@@ -253,7 +287,7 @@ for (slide in unique(cells.aux$cycif.slide)[c(1:4,10)]){
     sel.cell.core <- sel.cell[which(sel.cell$cycif.core.id == core),]
     df <- data.frame(Core_Names=paste0(core,"_Probabilities_cytomask2"),
                    Cellid=sel.cell.core$CellId,
-                   GlobalCellType=paste0("RCN",sel.cell.core$rcn_id))
+                   GlobalCellType=sel.cell.core$rcn_id)
     cell.id <- sapply(df$Cellid, function(x){
                       splitted <- strsplit(x,"_")[[1]]
                       cid <- splitted[5]
@@ -266,66 +300,26 @@ for (slide in unique(cells.aux$cycif.slide)[c(1:4,10)]){
                 sep=",", row.names = FALSE)
   }
 }
-# ###########################################
-#Plotting barplot for abundance of clusters
-barplot.rcn(cells.aux, method=method.rcn)
-
-###########################################
-#Plotting heatmap annotations with diversity and abundance of clusters
-heatmap.diversity(cells.aux, method=method.rcn)
-
-cells.aux.clin <- merge(cells.aux, clindata.shrd, by="imageid", all.x = TRUE)
-
-#Ignoring cores with high amount of cancer or stromal
-cells.aux.clin2 <- cells.aux.clin[!(cells.aux.clin$imageid %in% high.cancer |
-                                      cells.aux.clin$imageid %in% high.stromal),]
-
-#Ignoring patients with only one core
-patient.cores.nums <- cells.aux.clin2 %>% group_by(patient, imageid) %>%
-  summarise(N.cores=length(unique(imageid))) %>%
-  summarise(N.cores2=sum(N.cores))
-
-patients.low.num.cores <- patient.cores.nums$patient[which(patient.cores.nums$N.cores2 < 2)]
-cells.aux.clin2 <- cells.aux.clin2[!cells.aux.clin2$patient %in% patients.low.num.cores,]
-
-#Additionally ignore those patients with total amount of cancer cells very low
-tot.prop.cancer <- cells.aux.clin2 %>% group_by(patient, GlobalCellType) %>%
-                      summarise(N=n()) %>% mutate(Proportion = N * 100 /sum(N)) %>%
-                      dplyr::filter(GlobalCellType=="Cancer") %>% arrange(Proportion)
-
-patients.low.cancer <- tot.prop.cancer$patient[which(tot.prop.cancer$Proportion < 10)]
-cells.aux.clin2 <- cells.aux.clin2[!cells.aux.clin2$patient %in% patients.low.cancer,]
-
-#Ignoring RCN01c and RCN02c
-cells.aux.clin2 <- cells.aux.clin2[!cells.aux.clin2$rcn_id %in% c("RCN01c","RCN02c"),]
-
-###########################################
-#Plotting heatmap annotations with diversity and abundance of clusters
-heatmaps(cells.aux.clin2, method=method.rcn)
 ```
 
+
+
+#Saving RCNid per cell
+```{r}
+write.table(cells.aux[,c(1,2,8,9,10,11,12,13)],
+            file="D:/users/fperez/NKI_TMAs_AF/Tables/ALL_cells-RNCid_v20241122.csv", sep=",", row.names=FALSE)
+```
 
 
 #Saving proportion of RCN_id by image
 ```{r}
-cells.by.image <- cells.aux.clin %>% group_by(imageid, rcn_id) %>% select(patient, imageid, rcn_id) %>%
+cells.by.image <- cells.aux.clin %>% group_by(imageid, rcn_id) %>% 
                     summarise(N=n()) %>%
-                    mutate(Proportion = round(N * 100 /sum(N), 3))
+                    mutate(Proportion = N /sum(N))
 write.table(cells.by.image, file=paste0(out.folder.name,"RCN_by_image.csv"),sep=",", row.names = FALSE)
 ```
 
 
-```{r}
-ggplot(cells.by.image, aes(x=rcn_id, y=Proportion)) + geom_boxplot(fill=NA) +
-  geom_point(aes(y=Proportion, x=rcn_id), position= position_jitter(width= .3), color="darkgrey",
-             size= 2, alpha = 0.5) +
-  theme_bw()
 
 
-ggplot(cells.by.image[!cells.by.image$rcn_id %in% c("RCN01c","RCN02c"),], aes(x=rcn_id, y=Proportion)) +
-  geom_point(aes(y=Proportion, x=rcn_id), position= position_jitter(width= .3), color="darkgrey",
-             size= 2, alpha = 0.5) +
-  geom_boxplot(fill=NA, outlier.shape = NA) +
-  theme_bw()
-```
 
