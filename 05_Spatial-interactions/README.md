@@ -16,3 +16,5 @@ Scripts used to create Recurrent Cellular neighboorhoods (RNC), explore the resu
 - **WSI_Spatial_counts.ipynb**: Python script using modified scimap function to count the number of neighbor cells from each population on whole slide images.
 
 - **Find_neighboors_of_cancer_cells.ipynb*** - Script to get a list of neighboors of cancer cells, for calculating later expression of relevant functional markers of cancer cells neighboors.
+
+- **Scimap_spatial_analysis_clean.ipynb** - Script to calculate the RCNs used in the manuscript, using different metrics. 
