@@ -5,7 +5,7 @@
 This repository provides code for predicting ligand-receptor (LR) interactions from single-cell RNA sequencing (scRNA-seq) data using **MultiNicheNetR**. The analysis pipeline includes data preprocessing, LR interaction prediction, and result visualization comparing samples with high and low cancer MHCII U cell signatures.
 
 ### Maintainer
-**Gayani Anandagoda**
+**Aleksandra Shabanova & Gayani Anandagoda**
 
 ## Repository Structure
 
