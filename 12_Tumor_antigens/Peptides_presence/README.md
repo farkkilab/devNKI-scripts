@@ -12,11 +12,11 @@ This folder provides code for the analysis of an immunopeptidomic dataset. The p
 - **`01_Peptide_presence_analysis.ipynb`**  
   - Identifies peptides mapped to significantly correlated antigen genes across TCGA, scRNA-seq, and GeoMx cohorts tumor fraction.
   - Generates a heatmap showing the number of peptides per gene per patient.
-  - Selects genes uniquely mapped to the MHCII peptidome of four tumor-high samples and saves them to a `shared_genes_only_high_based_on_prop.txt` file.
+  - Selects genes uniquely mapped to the MHCII peptidome of four MHCII tumor-high samples and saves them to a `shared_genes_only_high_based_on_prop.txt` file.
 
 - **`02_Enrichment.Rmd`**  
   - Performs pathway enrichment analysis on the selected genes using the `enrichR` package.
-  - Outputs the top 10 overrepresented pathways from chosen databases.
+  - Outputs the top overrepresented pathways from chosen databases.
 
 ## Usage
 
