@@ -3,17 +3,17 @@
 
 Files:
 
-- Code is available in automatised_learning.py
+- Code is available in 'mol_profiles_bin_class_pipeline.py' for molecular profiles' prediction and in 'clinical_outcome_bin_class_pipeline.py' for clinical outcomes' prediction
 - Conda environment is in nki_env.yml
 
 To run the code:
 1. Set up a conda environment with the help of nki_env.yml file
 
    ````
-   conda env create -f nki_env.yml
+   conda env create -f env.yml
    ````
    ````
-   conda activate nki_env
+   conda activate cefiira_env
    ````  
 2. Prepare a CSV file with desired experiments
 
