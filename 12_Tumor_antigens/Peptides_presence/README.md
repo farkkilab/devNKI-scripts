@@ -35,4 +35,4 @@ This folder provides code for the analysis of an immunopeptidomic dataset. The p
    - A `shared_genes_only_high_based_on_prop.txt` file with genes uniquely found in the MHCII tumor-high peptidome.
 
 2. **Pathway Enrichment**  
-   Run `02_Enrichment.Rmd` using the `shared_genes_only_high_based_on_prop.txt` file generated in step 1 to obtain enriched pathways.
+   Run `02_Enrichment.Rmd` using the `shared_genes_only_high_based_on_prop.txt` file generated in step 1 to obtain enriched pathways (e.g., Fig. 6 g and h).
