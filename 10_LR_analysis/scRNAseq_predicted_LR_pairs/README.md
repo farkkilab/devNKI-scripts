@@ -2,12 +2,12 @@
 
 ## Overview
 
-This repository provides code for predicting ligand-receptor (LR) interactions from single-cell RNA sequencing (scRNA-seq) data using **MultiNicheNetR**. The analysis pipeline includes data preprocessing, LR interaction prediction, and result visualization comparing samples with high and low cancer MHCII U cell signatures.
+This folder provides code for predicting ligand-receptor (LR) interactions from single-cell RNA sequencing (scRNA-seq) data using **MultiNicheNetR**. The analysis pipeline includes data preprocessing, LR interaction prediction, and result visualization comparing samples with high and low cancer MHCII U cell signatures.
 
 ### Maintainer
 **Aleksandra Shabanova & Gayani Anandagoda**
 
-## Repository Structure
+## Folder Structure
 
 - **`MHCII_Signature_generation.Rmd`**  
   Generates plots to classify samples based on cancer MHCII U cell signature.
