@@ -1,0 +1,78 @@
+---
+title: "R Notebook"
+author: "Aleksandra Shabanova"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Define function for functional enrichment analysis and plotting based on selected database
+```{r}
+library('enrichR')
+library("ggplot2")
+library(tidyverse)
+
+functional_analysis = function(genes,subtitle,db) {
+  
+  print(db)
+  
+  # Perform functional enrichment analysis using enrichR
+  results = enrichr(genes, databases = c(db))
+
+  # Get significantly enriched terms
+  top_n_terms <- results[[db]][results[[db]]$Adjusted.P.value < 0.01, "Term"]
+  
+  # Loop through each enrichment result to create a plot
+  for (name in names(results)) {
+    
+    # Extract and process data for plotting
+    datatoplot = results[[name]]
+    datatoplot$mlog10Adjusted.P.value = -log10(datatoplot$Adjusted.P.value)
+    
+    datatoplot = datatoplot[order(datatoplot$mlog10Adjusted.P.value, decreasing = TRUE),]
+    datatoplot = datatoplot[1:10,]
+    datatoplot$Term = factor(datatoplot$Term,levels=rev(datatoplot$Term))
+    
+    # Create and plot the enrichment results
+    plot = ggplot() + 
+      labs(title=paste0("Enriched ", paste(strsplit(name, "_")[[1]][1:3], collapse = " "), "es")) +
+      geom_col(data=datatoplot,fill="#FED18C",aes(x = Term, y = mlog10Adjusted.P.value)) + # A7AEF2 #aes(x=Term,y=mlog10Adjusted.P.value,fill='mlog10Adjusted.P.value')
+      geom_text(data=datatoplot,aes(x=Term,y=mlog10Adjusted.P.value,label=Overlap), y=0,, size= 3, hjust = 0) +
+      # scale_fill_gradient(low='#D9DEE4',high='#D33F49',guide=guide_colorbar(title = "-log10(adjusted p-value)",title.position = 'top'),limits=c(0,6)) +
+      scale_y_continuous(limits = c(0, 6)) +
+      coord_flip() +
+      xlab("") +
+      ylab("-log10(Adjusted P value)") +
+      theme(
+        legend.position = 'none',
+        plot.title = element_text(size = 20),
+        axis.title = element_text(size = 10),
+        axis.text = element_text(size = 15, face = "bold"),
+        # legend.title = element_text(size = 12),
+        # legend.text = element_text(size = 10)
+      )
+      
+    plot(plot)
+    
+    # Save the plot
+    ggsave(paste0("/Volumes/h345/afarkkilab/Projects/NKI/Top28HLAIIAntigens/MHCII_peptides/", name, "_enrichment_plot.svg"), plot=plot, width=9, height=5, dpi=300)
+  
+  }
+  
+  print(length(top_n_terms))
+  print(paste(as.character(top_n_terms), collapse=","))
+  
+}
+```
+
+### Run enrichment for GO Biologica Process & Cellular Component
+```{r}
+genes = readLines("/Volumes/h345/afarkkilab/Projects/NKI/Top28HLAIIAntigens/MHCII_peptides/shared_genes_only_high_based_on_prop.txt")
+dbs = c('GO_Biological_Process_2025', 'GO_Cellular_Component_2025') # 'KEGG_2021_Human', 'WikiPathway_2023_Human', 'BioPlanet_2019', 'GO_Molecular_Function_2025', 'Panther_2016', 'Reactome_Pathways_2024'
+
+for (db in dbs) {
+  functional_analysis(genes, 'Plot for shared genes in high based on proportion', db)
+}
+```
+
+

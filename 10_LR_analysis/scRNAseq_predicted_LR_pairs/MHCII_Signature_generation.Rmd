@@ -1,0 +1,134 @@
+---
+title: "MHCII Signature Generation"
+author: "Gayani Anandagoda"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(Seurat)
+library(UCell)
+library(dplyr)
+library(edgeR)
+```
+
+
+```{r}
+# filter the samples with epithelial cells less than 40
+mhc2_genes<-c("HLA-DMA","HLA-DMB","HLA-DOA","HLA-DOB","HLA-DPA1","HLA-DPB1","HLA-DQA1","HLA-DQA2","HLA-DQB1","HLA-DRA","HLA-DRB1","HLA-DRB5","CD74")
+
+annotated_raw_data <-readRDS("/run/user/1356082/gvfs/smb-share:server=group3.ad.helsinki.fi,share=h345/afarkkilab/Data/13_sciset/launonen_cancercell_allcells_allannot.RDS")
+
+```
+
+
+```{r}
+# stratifying cells into three groups according to the MHCII Ucell scores
+
+# calculating MHCII signature scores
+sc_signatures <- AddModuleScore_UCell(annotated_raw_data, features = list(mhc2_sig=mhc2_genes), name = NULL,ncores = 10)
+
+#filter cells with < 40 EOCs
+eoc_samp <- table(sc_signatures$sample, sc_signatures$cell_type_detailed)
+eoc_samp <- rownames(eoc_samp)[eoc_samp[,"Epithelial cells"]>40]
+sc_signatures_subset <-subset(sc_signatures,subset= sample%in%eoc_samp)
+
+#check high-mid-low MHC2 cell groups 
+sc_signatures_subset$MHC2_group<-"mid"
+sc_signatures_subset$MHC2_group[sc_signatures_subset$mhc2_sig<quantile(sc_signatures_subset$mhc2_sig,.33)]<-"low"
+sc_signatures_subset$MHC2_group[sc_signatures_subset$mhc2_sig>quantile(sc_signatures_subset$mhc2_sig,.66)]<-"high"
+```
+
+
+```{r}
+# epithelial cells only
+sc_signatures_subset_epithelial_only <-subset(sc_signatures_subset, subset=cell_type_detailed=="Epithelial cells")
+
+
+#categorize MHC2 at sample level
+bulk<-AggregateExpression(object = sc_signatures_subset_epithelial_only, group.by = "sample",slot="counts")
+bulk<-bulk$RNA
+
+de.exp<- DGEList(counts=as.matrix(bulk))
+keep.exprs <- rowSums(cpm(de.exp)>1)>=2###keep genes that in at least 2 samples  has cpm>1
+de.exp <- de.exp[keep.exprs,, keep.lib.sizes=FALSE]
+limma<- calcNormFactors(de.exp,method = "TMM")
+tmmexp<-cpm(limma,log = T,prior.count = 3)##get the TMM normalized matrix (counts*1000000/(lib.size*norm.factors)),
+
+```
+
+```{r}
+#metabulk<-as.data.frame(sc_signatures_subset_epithelial_only@meta.data%>%select(sample,patient,PDS,HRD)%>%group_by(sample,patient,PDS,HRD)%>%distinct())
+
+metabulk<-as.data.frame(sc_signatures_subset_epithelial_only@meta.data%>%select(sample,patient)%>%group_by(sample,patient)%>%distinct())
+rownames(metabulk)<-metabulk$sample
+
+mhc2_scores <- ScoreSignatures_UCell(tmmexp, features=list(mhc2_sig=mhc2_genes))
+rownames(mhc2_scores) <- gsub("-", "_", rownames(mhc2_scores))
+
+# check what is happening inside this code
+metabulk$mhc2_group<-"mid"
+metabulk[c(rownames(mhc2_scores)[mhc2_scores>quantile(mhc2_scores,.66)]),"mhc2_group"]<-"high" #higher quantile 0.165
+metabulk[rownames(mhc2_scores)[mhc2_scores<quantile(mhc2_scores,.33)],"mhc2_group"]<-"low" #lower  quantile 0.06
+#table(metabulk$PDS,metabulk$mhc2_group)
+
+```
+
+```{r}
+
+sc_signatures$MHC2_group_bulk<-"mid"
+sc_signatures$MHC2_group_bulk[sc_signatures$sample%in%rownames(metabulk)[metabulk$mhc2_group=="low"]]<-"low"
+sc_signatures$MHC2_group_bulk[sc_signatures$sample%in%rownames(metabulk)[metabulk$mhc2_group=="high"]]<-"high"
+```
+
+```{r}
+saveRDS(sc_signatures, file = "/run/user/1356082/gvfs/smb-share:server=group3.ad.helsinki.fi,share=h345/afarkkilab/Projects/NKI/Single_Cell_LR_Annalysis/input/launonen_cancercell_allcells_allannot_Ucell_scores_included.RDS")
+```
+
+```{r}
+unique(sc_signatures$MHC2_group_bulk)
+```
+
+### Plot the MHCII score per cell and sample distribution
+```{r}
+library("ggplot2")
+
+df = data.frame(scores = sc_signatures$mhc2_sig)
+
+plot1 = ggplot(df, aes(x = scores)) +
+  geom_density(fill = "blue") +
+  ggtitle("U cell score per cell distribution") +
+  theme_minimal()
+
+plot1
+```
+
+```{r}
+Per_sample_U_cell_score = data.frame(mhc2_scores)
+
+plot2 = ggplot(Per_sample_U_cell_score, aes(x = mhc2_sig_UCell)) +
+  geom_density(fill = "blue") +
+  ggtitle("U cell score per sample distribution") +
+  theme_minimal()
+
+plot2
+```
+
+```{r}
+Per_sample_U_cell_score = data.frame(sampel = rownames(Per_sample_U_cell_score),Per_sample_U_cell_score)
+
+Ucell_scores = data.frame(unique(Ucell_scores_csv[,c(1,2)]))
+
+df = cbind(Ucell_scores,Per_sample_U_cell_score)
+df = data.frame(approx = round(df$mhc2_sig_UCell,2),df)
+df = data.frame(approx1 = round(df$mhc2_sig_UCell.1,2),df)
+```
+
+
+
+

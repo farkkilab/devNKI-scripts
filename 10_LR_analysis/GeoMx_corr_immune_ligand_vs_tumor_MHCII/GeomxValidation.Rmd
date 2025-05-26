@@ -1,0 +1,465 @@
+---
+title: "R Notebook"
+author: Aleksandra
+output: html_notebook
+---
+
+### Load libraries
+```{r}
+library(data.table)
+library(dplyr)
+library(RColorBrewer)
+library(ggplot2)
+library(ggpubr)
+library(ggpmisc)
+library(reshape2)
+library(tibble)
+library(tidyverse)
+library(broom)
+```
+
+### Functions
+```{r}
+transform_expression_df <- function(df, metadata) {
+  df %>%
+    pivot_longer(
+      cols = -gene_name,
+      names_to = "dcc_filename",
+      values_to = "expression"
+    ) %>%
+    left_join(metadata, by = "dcc_filename") %>%
+    select(gene_name, expression, dcc_filename, Roi, Segment, Patient)
+}
+
+analyze_LR_pairs <- function(LR_df, merged_df, ligand_expr_col, sender_label, receptor_label, receptor_column) {
+  
+  print(LR_df)
+  
+  results <- list()
+  
+  for (i in 1:nrow(LR_df)) {
+    
+    print(LR_df$ligand[i])
+    
+    ligand   <- LR_df$ligand[i]
+    
+    # Define receptor in tumor as HLA gene, Ucell score or gene of matching receptor for ligand
+    if (receptor_label == 'HLA-DRB1') {
+      receptor <- 'HLA-DRB1'
+    } else if (receptor_label == 'FER_MHC_REVISITED') {
+      receptor <- 'FER_MHC_REVISITED'
+    } else {
+      receptor <- LR_df$receptor[i]
+    }
+    
+    # Check if both ligand and receptor are present
+    if (!(ligand %in% merged_df$gene_name) || !(receptor %in% merged_df[[receptor_column]])) {
+      message(paste("Skipping", ligand, "-", receptor, ": not found in merged_df"))
+      next
+    }
+    
+    print(paste0(ligand,receptor))
+    
+    # Dynamically select the expression column
+    ligand_df <- merged_df %>%
+      filter(gene_name == ligand) %>%
+      select(Roi, Patient, ligand_expr = all_of(ligand_expr_col))
+
+    receptor_df <- merged_df %>%
+      filter(.data[[receptor_column]] == receptor) %>%
+      select(Roi, receptor_expr = tumor_expression)
+
+    # Merge on Roi
+    expr_df <- inner_join(ligand_df, receptor_df, by = "Roi") %>%
+      na.omit()
+
+    # Correlation
+    cor_res <- cor.test(expr_df$ligand_expr, expr_df$receptor_expr, method = "pearson")
+    
+    cor_est <- cor_res$estimate
+    cor_pval <- cor_res$p.value
+    
+    # Linear model
+    model <- lm(receptor_expr ~ ligand_expr + Patient, data = expr_df)
+    print(summary(model))
+    r2 <- summary(model)$r.squared
+    pval <- glance(model)$p.value
+    # pval <- summary(model)$coefficients["ligand_expr", "Pr(>|t|)"]
+
+    # Store result
+    results[[length(results) + 1]] <- data.frame(
+      sender = sender_label,
+      ligand = ligand,
+      receptor = receptor,
+      correlation = cor_est,
+      cor_p_value = cor_pval
+    )
+
+    # Plot
+    p <- ggplot(expr_df, aes(x = ligand_expr, y = receptor_expr)) +
+      geom_point(color = "steelblue", size = 3) +
+      geom_smooth(method = "lm", se = TRUE, color = "red") +
+      labs(
+        title = paste(ligand, "(", sender_label, ") vs", receptor, "(Tumor)"),
+        subtitle = paste("R² =", round(r2, 3), "| p =", signif(pval, 3)),
+        x = paste("Ligand:", ligand),
+        y = paste("Receptor:", receptor)
+      ) +
+      theme_minimal()
+
+    # print(p)
+  }
+  
+  print(results)
+  
+  # Combine results
+  do.call(rbind, results)
+}
+
+# Function to check gene presence in a dataframe
+check_genes <- function(genes, df, df_name) {
+  if (is.null(rownames(df))) {
+    stop(paste("Dataframe", df_name, "has no row names!"))
+  }
+  
+  present_genes <- genes[genes %in% df$gene_name]
+  missing_genes <- genes[!genes %in% df$gene_name]
+  
+  cat("====", df_name, "====\n")
+  cat("Present genes:\n")
+  print(present_genes)
+  cat("\nMissing genes:\n")
+  print(missing_genes)
+  cat("\n\n")
+}
+```
+
+### Read datasets
+```{r}
+# Read metadata and all & de-convoluted expression tables
+metadata <- data.frame(fread('/../../Volumes/h345/afarkkilab/Projects/NKI/Single_Cell_LR_Analysis/Geomx_validation/Data/geomx_metadata.csv'))
+gsea_all <- data.frame(fread('/../../Volumes/h345/afarkkilab/Projects/NKI/Single_Cell_LR_Analysis/Geomx_validation/Data/geomx_harmony_corr_expr.csv'))
+deconv_ct_frac <- readRDS("/../../Volumes/h345/afarkkilab/Projects/NKI/Single_Cell_LR_Analysis/Geomx_validation/Data/bp_res_mid_lvl_ct_expr_mtx_cleaned_vst_harmony_batch_corr.RDS")
+
+# Read L-R pairs 
+top7LR_interactions <- data.frame(fread("/../../Volumes/h345/afarkkilab/Projects/NKI/Single_Cell_LR_Analysis/Figures_Results/top7LRinteractions.csv"))
+```
+
+### Prepare dataframes
+#### Filter for selected genes from top7 L-R pairs
+```{r}
+# Replace '.' with '-' in ligand and receptor columns
+top7LR_interactions$ligand   <- gsub("\\.", "-", top7LR_interactions$ligand)
+top7LR_interactions$receptor <- gsub("\\.", "-", top7LR_interactions$receptor)
+
+# Define subsets of L-R interactions of interest
+Tcells_LR_df <- filter(top7LR_interactions, !sender %in% c('DC'))
+DCs_LR_df <- filter(top7LR_interactions, sender == "DC")
+# Bcells_LR_df <- filter(top7LR_interactions, sender == "Bcell")
+
+# Select genes of interest 
+tumor_receptors <- unique(c(top7LR_interactions$receptor, 'HLA-DRB1'))
+stroma_ligands <- unique(top7LR_interactions$ligand)
+Tcells_ligands <- unique(Tcells_LR_df$ligand)
+DCs_ligands <- unique(DCs_LR_df$ligand)
+# Bcells_ligands <- unique(Bcells_LR_df$ligand)
+genes <- unique(c(top7LR_interactions$ligand, top7LR_interactions$receptor, 'HLA-DRB1'))
+
+# Filter expression dataframes for selected genes only
+filtered_gsea_all <- gsea_all %>% filter(gene_name %in% genes)
+
+# Select deconvoluted matrixes for cell types of interest 
+tumor_df  <- as.data.frame(deconv_ct_frac[["tumor"]])
+tumor_df  <- tumor_df %>% rownames_to_column(var = "gene_name")
+
+Tcells_df <- as.data.frame(deconv_ct_frac[["Tcells"]])
+Tcells_df <- Tcells_df %>% rownames_to_column(var = "gene_name")
+
+Bcells_df <- as.data.frame(deconv_ct_frac[["Bcells"]])
+Bcells_df <- Bcells_df %>% rownames_to_column(var = "gene_name")
+
+DCs_df    <- as.data.frame(deconv_ct_frac[["DCs"]])
+DCs_df    <- DCs_df %>% rownames_to_column(var = "gene_name")
+
+# Run the check if expression dataframes are missing any genes
+check_genes(tumor_receptors, tumor_df, "tumor_df")
+check_genes(Tcells_ligands, Tcells_df, "Tcells_df")
+# check_genes(genes, Bcells_df, "Bcells_df")
+check_genes(DCs_ligands, DCs_df, "DCs_df")
+
+# Filter expression dataframes for selected genes only (ensure same number of genes across dfs for joining)
+filtered_tumor_df  <- tumor_df %>% filter(gene_name %in% genes)
+filtered_Tcells_df <- Tcells_df %>% filter(gene_name %in% genes)
+# filtered_Bcells_df <- Bcells_df %>% filter(gene_name %in% genes)
+filtered_DCs_df    <- DCs_df %>% filter(gene_name %in% genes)
+```
+
+```{r}
+# Relabel Roi to make it unique
+metadata$Roi <- paste0(metadata$Sample, '_', metadata$Roi)
+
+# Match dcc_filanames format to metadata 
+colnames(filtered_gsea_all) <- sub("\\.dcc$", "-dcc", colnames(filtered_gsea_all))           # temporarily protect '.dcc'
+colnames(filtered_gsea_all) <- gsub("\\.", "-", colnames(filtered_gsea_all))                 # replace all remaining '.' with '-'
+colnames(filtered_gsea_all) <- sub("-dcc$", ".dcc", colnames(filtered_gsea_all))  
+
+all_exp_combined <- transform_expression_df(filtered_gsea_all, metadata)
+tumor_combined  <- transform_expression_df(filtered_tumor_df, metadata)
+Tcells_combined  <- transform_expression_df(filtered_Tcells_df, metadata)
+DCs_combined     <- transform_expression_df(filtered_DCs_df, metadata)
+# Bcells_combined  <- transform_expression_df(filtered_Bcells_df, metadata)
+
+# Subset for tumor and stroma segments
+stroma_combined  <- all_exp_combined[all_exp_combined$Segment == "stroma", ]
+# tumor_combined   <- all_exp_combined[all_exp_combined$Segment == "tumor", ]
+
+Tcells_combined  <- Tcells_combined[Tcells_combined$Segment == "stroma", ]
+DCs_combined     <- DCs_combined[DCs_combined$Segment == "stroma", ]
+```
+
+#### Combine datasets by Roi with expression column per aoi and cell type of interest
+```{r}
+# Rename expression columns
+tumor_combined$tumor_expression   <- tumor_combined$expression
+stroma_combined$stroma_expression <- stroma_combined$expression
+Tcells_combined$Tcell_expression  <- Tcells_combined$expression
+DCs_combined$DCs_expression       <- DCs_combined$expression
+# Bcells_combined$Bcell_expression <- Bcells_combined$expression
+
+# Merge on gene_name and Roi to ensure same number of Rois
+merged_df <- tumor_combined[, c("gene_name", "Roi", "tumor_expression", "dcc_filename", "Patient")] %>%
+  left_join(stroma_combined[, c("gene_name", "Roi", "stroma_expression")], by = c("gene_name", "Roi")) %>%
+  left_join(Tcells_combined[, c("gene_name", "Roi", "Tcell_expression")], by = c("gene_name", "Roi")) %>%
+  left_join(DCs_combined[, c("gene_name", "Roi", "DCs_expression")], by = c("gene_name", "Roi"))
+```
+
+### Perform correlation and linear dependence analysis between L-R pairs in subsets of interest
+```{r}
+# For Tcells subset
+Tcell_results <- analyze_LR_pairs(
+  LR_df = Tcells_LR_df,
+  merged_df = merged_df,
+  ligand_expr_col = "Tcell_expression",
+  sender_label = "Tcell",
+  receptor_label = 'receptor',
+  receptor_column = 'gene_name'
+)
+
+# For DCs subset
+DCs_results <- analyze_LR_pairs(
+  LR_df = DCs_LR_df,
+  merged_df = merged_df,
+  ligand_expr_col = "DCs_expression",
+  sender_label = "DC",
+  receptor_label = 'receptor',
+  receptor_column = 'gene_name'
+)
+
+# For all (Stroma) subset
+Stroma_results <- analyze_LR_pairs(
+  LR_df = top7LR_interactions,
+  merged_df = merged_df,
+  ligand_expr_col = "stroma_expression",
+  sender_label = "Stroma",
+  receptor_label = 'receptor',
+  receptor_column = 'gene_name'
+)
+
+all_LR_results <- bind_rows(Tcell_results, DCs_results, Stroma_results)
+
+# Adjust p-value for multiple testing
+all_LR_results$fdr <- p.adjust(all_LR_results$cor_p_value)
+```
+### Perform correlation and linear dependence analysis between Ligand and Tumor HLA-DRB1 pairs in subsets of interest
+```{r}
+# For Tcells subset
+Tcell_results <- analyze_LR_pairs(
+  LR_df = Tcells_LR_df,
+  merged_df = merged_df,
+  ligand_expr_col = "Tcell_expression",
+  sender_label = "Tcell",
+  receptor_label = 'HLA-DRB1',
+  receptor_column = 'gene_name'
+)
+
+# For DCs subset
+DCs_results <- analyze_LR_pairs(
+  LR_df = DCs_LR_df,
+  merged_df = merged_df,
+  ligand_expr_col = "DCs_expression",
+  sender_label = "DC",
+  receptor_label = 'HLA-DRB1',
+  receptor_column = 'gene_name'
+)
+
+# For all (Stroma) subset
+Stroma_results <- analyze_LR_pairs(
+  LR_df = top7LR_interactions,
+  merged_df = merged_df,
+  ligand_expr_col = "stroma_expression",
+  sender_label = "Stroma",
+  receptor_label = 'HLA-DRB1',
+  receptor_column = 'gene_name'
+)
+
+all_LigHLA_results <- bind_rows(Tcell_results, DCs_results, Stroma_results)
+
+# Adjust p-value for multiple testing
+all_LigHLA_results$fdr <- p.adjust(all_LigHLA_results$cor_p_value)
+```
+
+### Read data with Ucell scores per pathways and prepare for analysis
+```{r}
+#GSEA calculated from deconvoluted tumor signal
+gsea_deconv_tum <- data.frame(fread('/../../Volumes/h345/afarkkilab/Projects/NKI/GeoMX/Inputs/ssgsea_norm_harmony_batch_corr_deconv_tumor_custom_IFNg_pathways.csv.csv'))
+
+# Select MHC-II Ucell score
+tumor_mhcii <- gsea_deconv_tum %>% filter(pathway == "FER_MHC_REVISITED")
+
+# Relabel Roi to make it unique
+tumor_mhcii$Roi <- paste0(tumor_mhcii$Sample, '_', tumor_mhcii$Roi)
+
+tumor_mhcii <- tumor_mhcii %>% rename_at('ssgsea_score', ~'tumor_expression')
+tumor_mhcii   <- tumor_mhcii[tumor_mhcii$Segment == "tumor", ]
+```
+
+### Perform correlation and linear dependence analysis between Ligand and tumor MHC-II U cell score pairs in subsets of interest
+```{r}
+# Merge on gene_name and Roi to ensure same number of Rois
+merged_df <- tumor_mhcii[, c("pathway", "tumor_expression", "Roi", "dcc_filename", "Patient")] %>%
+  left_join(Tcells_combined[, c("gene_name", "Roi", "Tcell_expression")], by = "Roi")
+
+# For Tcells subset
+Tcell_results <- analyze_LR_pairs(
+  LR_df = Tcells_LR_df,
+  merged_df = merged_df,
+  ligand_expr_col = "Tcell_expression",
+  sender_label = "Tcell",
+  receptor_label = 'FER_MHC_REVISITED',
+  receptor_column = 'pathway'
+)
+
+# Merge on gene_name and Roi to ensure same number of Rois
+merged_df <- tumor_mhcii[, c("pathway", "tumor_expression", "Roi", "dcc_filename", "Patient")] %>%
+  left_join(DCs_combined[, c("gene_name", "Roi", "DCs_expression")], by = "Roi")
+
+# For DCs subset
+DCs_results <- analyze_LR_pairs(
+  LR_df = DCs_LR_df,
+  merged_df = merged_df,
+  ligand_expr_col = "DCs_expression",
+  sender_label = "DC",
+  receptor_label = 'FER_MHC_REVISITED',
+  receptor_column = 'pathway'
+)
+
+# Merge on gene_name and Roi to ensure same number of Rois
+merged_df <- tumor_mhcii[, c("pathway", "tumor_expression", "Roi", "dcc_filename", "Patient")] %>%
+  left_join(stroma_combined[, c("gene_name", "Roi", "stroma_expression")], by = "Roi")
+
+# For all (Stroma) subset
+Stroma_results <- analyze_LR_pairs(
+  LR_df = top7LR_interactions,
+  merged_df = merged_df,
+  ligand_expr_col = "stroma_expression",
+  sender_label = "Stroma",
+  receptor_label = 'FER_MHC_REVISITED',
+  receptor_column = 'pathway'
+)
+
+# all_LigMHCUcell_results <- bind_rows(Tcell_results, DCs_results, Stroma_results)
+
+# Adjust p-value for multiple testing
+Stroma_results$fdr <- p.adjust(Stroma_results$cor_p_value)
+```
+# Combined all results for plotting
+```{r}
+# Rename columns in each dataframe
+all_LR_results <- all_LR_results %>%
+  rename(
+    r_receptor = receptor,
+    correlation_receptor = correlation,
+    cor_p_val_receptor = cor_p_value,
+    fdr_receptor = fdr
+  )
+
+all_LigHLA_results <- all_LigHLA_results %>%
+  rename(
+    r_HLA_DPB1 = receptor,
+    correlation_HLA_DPB1 = correlation,
+    cor_p_val_HLA_DPB1 = cor_p_value,
+    fdr_HLA_DPB1 = fdr
+  )
+
+all_LigMHCUcell_results <- all_LigMHCUcell_results %>%
+  rename(
+    r_MHCIIUcellScore = receptor,
+    correlation_MHCIIUcellScore = correlation,
+    cor_p_val_MHCIIUcellScore = cor_p_value,
+    fdr_MHCIIUcellScore = fdr
+  )
+
+# Merge dataframes on sender and ligand using full join
+# final_results_df <- all_LigHLA_results %>%
+#   # full_join(all_LigHLA_results, by = c("sender", "ligand")) %>%
+#   full_join(all_LigMHCUcell_results, by = c("sender", "ligand")) %>%
+#   distinct()
+```
+
+# Plot correlation for MHC-II U cell Score - Fig.5 i
+```{r}
+
+# Remove duplicate rows across all columns
+distinct_Stroma_results <- Stroma_results %>%
+  distinct(ligand, receptor, .keep_all = TRUE) %>%
+  arrange(desc(correlation))
+
+# Convert to long format without converting to a factor
+cor_est_long <- distinct_Stroma_results %>%
+  pivot_longer(
+    cols = starts_with("correlation"),
+    names_to = "cor_type",
+    values_to = "cor_value"
+  ) %>%
+  # Ensure cor_value is numeric and ordered based on correlation in descending order
+  mutate(cor_value = as.numeric(cor_value)) %>%
+  arrange(desc(cor_value))  # Sort by cor_value in descending order
+
+# Similarly process the p-value data
+pval_long <- distinct_Stroma_results %>%
+  pivot_longer(
+    cols = starts_with("fdr"),
+    names_to = "cor_type",
+    values_to = "cor_fdr"
+  ) %>%
+  mutate(cor_type = str_replace(cor_type, "fdr", ""))
+
+# Merge correlation and p-value data
+combined_long <- cor_est_long %>%
+  mutate(cor_type = str_replace(cor_type, "correlation", "")) %>%
+  left_join(pval_long, by = c("sender", "ligand", "cor_type"))
+
+# Ensure the data is ordered by correlation values
+combined_long <- combined_long %>%
+  mutate(ligand = factor(ligand, levels = combined_long$ligand[order(combined_long$cor_value, decreasing = FALSE)]))
+
+# Plot heatmap with size based on p-value
+p <- ggplot(combined_long, aes(x = cor_type, y = ligand, fill = cor_value, size = -log10(cor_fdr))) +
+  geom_point(shape = 21, color = "black") +
+  scale_fill_gradient2(low = "#6599CD", mid = "#D9DEE4", high = "#D33F49", midpoint = 0,
+                       name = "Pearson\nCorrelation") +
+  scale_size_continuous(name = "-log10(FDR)") +
+  theme_minimal() +
+  labs(x = "MHC-II tumor ssGSEA score", y = "") +
+  ggtitle("Correlation of ligands vs tumor MHC-II Ucell score")
+
+print(p)
+
+# Save plot
+ggsave(
+  filename = "corr_Ligand_vs_tumor_MHCUcellScore.svg",
+  plot = p,
+  width = 3, height = 3.5
+)
+```
+

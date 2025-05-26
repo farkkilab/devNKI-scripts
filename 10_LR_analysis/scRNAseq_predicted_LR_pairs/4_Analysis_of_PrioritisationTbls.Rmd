@@ -1,0 +1,227 @@
+---
+title: "R Notebook"
+author: Aleksandra
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+
+# List of immune cells
+immune_cells <- c("FOXP3_CD4_Treg", "CD8_T_cell", "CD4_T_cell", "DC") # "FOXP3_CD4_Treg", "CD8_T_cell", "CD4_T_cell", "DC" "B_cell"
+
+# File path base
+base_path <- "/../../Volumes/h345/afarkkilab/Projects/NKI/LR_Analysis/scRNAseq/All_samples"
+```
+
+```{r}
+all_top7_LRs <- data.frame()
+
+# Loop through each immune cell
+for (immune_cell in immune_cells) {
+  
+  # Construct filename
+  file_path <- file.path(base_path, paste0("prioritization_tables_Tumor_", immune_cell, "_cell_types_all.RDS"))
+  
+  # Check if file exists
+  if (!file.exists(file_path)) {
+    warning(paste("File not found:", file_path))
+    next
+  }
+  
+  # Load RDS
+  df <- readRDS(file_path)
+
+  # Filter group prioritization data
+  prioritisation_df <- df$group_prioritization_tbl %>%
+    filter(
+      sender %in% c("Tumor", immune_cell),
+      receiver %in% c("Tumor", immune_cell),
+      sender != receiver
+    )
+  
+  # Select high group L-R only
+  prioritisation_df <- prioritisation_df %>% filter(group == "High")
+  
+  # Filter sample prioritization data
+  samples_df <- df$sample_prioritization_tbl %>%
+    filter(
+      sender %in% c("Tumor", immune_cell),
+      receiver %in% c("Tumor", immune_cell),
+      sender != receiver
+    )
+  
+  # Adjust for missing genes in GeoMx expression df
+  if (immune_cell == 'CD8_T_cell'){
+    prioritisation_df <- prioritisation_df %>% filter(!receptor %in% c("MUC15","NECTIN2"))
+    prioritisation_df <- prioritisation_df %>% filter(!ligand %in% c("ADGRE5","CCL4"))
+    
+  }
+  
+  # Get top 7 LR interactions
+  top7_LR <- head(prioritisation_df, 7)
+  print(top7_LR)
+  
+  # Add to cumulative df
+  all_top7_LRs <- bind_rows(all_top7_LRs, top7_LR[, c("sender", "receiver", "ligand", "receptor")])
+  
+  # Match sample data to top7
+  matching_samples <- samples_df %>%
+    semi_join(top7_LR, by = c("sender", "receiver", "ligand", "receptor"))
+  
+  # Group and prepare data
+  grouped_samples <- matching_samples %>%
+    group_by(sender, receiver, ligand, receptor) %>%
+    arrange(desc(scaled_LR_pb_prod), .by_group = TRUE)
+  
+  plot_data <- grouped_samples %>%
+    mutate(
+      interaction_label = paste(ligand, "-", receptor, sep = "")
+    ) %>%
+    arrange(group, sample) %>%
+    mutate(sample = factor(sample, levels = unique(sample)))
+  
+  plot_data <- plot_data %>%
+    mutate(point_size_cat = case_when(
+      keep_sender_receiver == "Sender & Receiver present" ~ "Sender & Receiver present",
+      keep_sender_receiver == "Sender absent" ~ "Sender absent",
+      TRUE ~ NA_character_
+    )) %>%
+    mutate(point_size_cat = factor(point_size_cat, levels = c(
+      "Sender & Receiver present",
+      "Sender absent"
+    )))
+
+  # Identify sender and receiver
+  sender <- unique(plot_data$sender)
+  receiver <- unique(plot_data$receiver)
+  
+  # Plot per sample scaled L-R expression product
+  # # Group boundaries for vlines
+  # group_boundaries <- plot_data %>%
+  #   distinct(group, sample) %>%
+  #   group_by(group) %>%
+  #   summarize(first_sample = first(sample), .groups = "drop") %>%
+  #   mutate(position = match(first_sample, levels(plot_data$sample))) %>%
+  #   arrange(position)
+  # 
+  # vline_positions <- group_boundaries$position[-1] - 0.5
+  # 
+  # # Generate plot
+  # p <- ggplot(plot_data, aes(x = sample, y = interaction_label)) +
+  #   geom_point(aes(color = scaled_LR_pb_prod, size = point_size_cat)) +
+  #   geom_vline(xintercept = vline_positions, linetype = "solid", color = "gray50") +
+  #   scale_color_gradient2(low = "blue", mid = "gray90", high = "red",
+  #                         midpoint = 0, limits = c(-3, 3), oob = scales::squish) +
+  #   scale_size_manual(
+  #   values = c(
+  #     "Sender & Receiver present" = 4,
+  #     "Sender absent" = 2
+  #   ),
+  #   name = "Presence Status"
+  # ) +
+  #   theme_minimal() +
+  #   labs(
+  #     title = immune_cell,
+  #     x = "Sample",
+  #     y = paste(sender, "→", receiver),
+  #     color = "Scaled L-R exp product",
+  #     size = "Presence of sender & receiver"
+  #   ) +
+  #   theme(
+  #     axis.text.x = element_text(angle = 90),
+  #     panel.grid.major = element_blank(),
+  #     panel.grid.minor = element_blank()
+  #   )
+  # 
+  # # Save plot
+  # ggsave(
+  #   filename = paste0("LR_interactions_", immune_cell, ".svg"),
+  #   plot = p,
+  #   width = 10, height = 3
+  # )
+  
+  # Plot median scaled L-R expression product difference between high and low
+  # Median per group
+  group_medians <- plot_data %>%
+    group_by(interaction_label, group) %>%
+    summarize(median_scaled_LR = median(scaled_LR_pb_prod, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = group, values_from = median_scaled_LR)
+  
+  # Compute log2 fold change (High / Low)
+  group_medians <- group_medians %>%
+    mutate(
+      diff_median = High - Low
+    )
+  
+  # Wilcoxon test per interaction
+  wilcox_results <- plot_data %>%
+    group_by(interaction_label) %>%
+    filter(group %in% c("High", "Low")) %>%
+    summarize(
+      test = list(wilcox.test(scaled_LR_pb_prod ~ group)),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      p_value = map_dbl(test, "p.value"),
+      neg_log10_p = -log10(p_value)
+    ) %>%
+    select(interaction_label, p_value, neg_log10_p)
+  
+  # Merge with fold change data
+  final_data <- group_medians %>%
+    left_join(wilcox_results, by = "interaction_label")
+  
+  # Reorder final_data by 'diff_median' and set 'interaction_label' as a factor
+  final_data <- final_data %>%
+    arrange(diff_median) %>%
+    mutate(interaction_label = factor(interaction_label, levels = interaction_label))
+  
+  print(paste0("Median difference min - ", min(final_data$diff_median), "max - ", max(final_data$diff_median)))
+  print(paste0("-log10(p-value) min - ", min(final_data$neg_log10_p), "max - ", max(final_data$neg_log10_p)))
+  
+  # Create plot for median difference
+  p = ggplot(final_data, aes(x = "Effect", y = interaction_label)) +
+  geom_point(aes(color = diff_median, size = neg_log10_p)) +
+  scale_color_gradient2(
+    low = "#D9DEE4", high = "#a1252d", # mid = "#FED18C", midpoint = 1,
+    name = "Median difference\n(High − Low)\nin scaled L-R\npseudobulk\nexpression\nproduct",
+    limits = c(0,2)
+  ) +
+  scale_size_continuous(
+    name = "-log10(p-value)",
+    range = c(1, 6),
+    limits = c(0, 4)
+  ) +
+  theme_minimal() +
+  labs(
+    # title = immune_cell,
+    x = NULL,
+    y = paste(str_replace_all(sender, "_", " "), "→", receiver)
+  ) +
+  theme(
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "right"
+  )
+  
+  print(p)
+  
+  # Save plot
+  ggsave(
+    filename = paste0("/../../Volumes/h345/afarkkilab/Projects/NKI/LR_Analysis/scRNAseq/Figures_Results/LR_MedianDif_", immune_cell, ".svg"),
+    plot = p,
+    width = 5, height = 5
+  )
+
+}
+```
+
+```{r}
+all_top7_LRs
+```
+```{r}
+write.csv(all_top7_LRs, file='/../../Volumes/h345/afarkkilab/Projects/NKI/LR_Analysis/scRNAseq/Figures_Results/top7LRinteractions.csv', row.names = FALSE)
+```

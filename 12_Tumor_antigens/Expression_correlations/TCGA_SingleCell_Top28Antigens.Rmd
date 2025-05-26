@@ -1,0 +1,283 @@
+---
+title: "TCGA Cancer Fraction and Single cell Epithelial Top 28 Antigen Expression"
+output: html_notebook
+---
+### Load libraries
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(readxl)
+library("ggpubr")
+library(ggplot2)
+```
+
+# Prepare TCGA cancer fraction data with patients' details
+
+### Read input RNA deconvolution files
+```{r}
+input.folder <- "/Volumes/h345/afarkkilab/Projects/NKI/TCGA_PRISM_RNAdeconvolution/"
+
+g <- read.table(file=paste0(input.folder,"G.tsv"))
+z <- read.table(file=paste0(input.folder,"Z.tsv"), header = TRUE)
+w <- read.table(file=paste0(input.folder,"W.tsv"), header = TRUE)
+```
+
+### Read HRD status shared in Perez-Villatoro et al 2022 and clinical data from TCGA
+```{r}
+clin.dat <- read.csv(file = paste0(input.folder,"TCGA-CDR-SupplementalTableS1_stage-survival.csv"),
+                      header = TRUE, row.names = 1)
+
+HRD.tab <- read.table(file=paste0(input.folder,"Categories_Konstantinopoulos_HR_HGSC_germline.csv"),
+                      sep=",", header=TRUE)
+```
+
+### Stratify samples acording to tumoral molecular profiles
+```{r}
+HRD.tab$Molecular.profile <- "HRP"
+HRD.tab$Molecular.profile[HRD.tab$categories == "CCNE1 amplification"] <- "CCNE1amp"
+HRD.tab$Molecular.profile[(HRD.tab$HRDsum >= 54 & !grepl("BRCA", HRD.tab$categories))] <- "HRD"
+HRD.tab$Molecular.profile[grep("BRCA", HRD.tab$categories)] <- "BRCAloss"
+HRD.tab <- HRD.tab[,c("Sample","Molecular.profile")]
+```
+
+### Structure clinical data
+```{r}
+clin.dat <- clin.dat[clin.dat$type == "OV",]
+clin.dat$PFI.time <- as.numeric(clin.dat$PFI.time)/30.4
+clin.dat$OS.time <- as.numeric(clin.dat$OS.time)/30.4
+clin.dat$OS <- as.numeric(clin.dat$OS)
+clin.dat$PFI <- as.numeric(clin.dat$PFI)
+clin.dat$age <- as.numeric(clin.dat$age_at_initial_pathologic_diagnosis)
+
+clin.dat$age.bin <- NA
+clin.dat$age.bin[clin.dat$age < 40] = 0
+clin.dat$age.bin[clin.dat$age >= 40 & clin.dat$age < 50] = 1
+clin.dat$age.bin[clin.dat$age >= 50 & clin.dat$age < 60] = 2
+clin.dat$age.bin[clin.dat$age >= 60 & clin.dat$age < 70] = 3
+clin.dat$age.bin[clin.dat$age >= 70 & clin.dat$age < 80] = 4
+clin.dat$age.bin[clin.dat$age >= 80] = 5
+
+#Selecting only high patients with grade tumors 
+clin.dat <- clin.dat[clin.dat$histological_grade %in% c("G3","G4"),]
+
+#Ignoring low clinical stages
+clin.dat <- clin.dat[!clin.dat$histological_grade %in% c("Stage IA","Stage IB", "Stage IC",
+                                                         "Stage IIA","Stage IIB","Stage IIC"),]
+```
+
+### Normalize data according to PRISM developers
+```{r}
+w.dat <- as.matrix(w[,-1])
+z.dat <- as.matrix(z[,-c(1,2)])
+
+deconv <- t( t(z.dat) / c(t(g * w.dat )))
+deconv <- as.data.frame(deconv)
+
+deconv$symbol <- z$symbol
+
+deconv <- deconv %>% select(symbol, everything())
+```
+
+### Organize data table
+```{r}
+#Selecting the expression columns that comes from Epithelial Ovarian Cancer
+eoc <- deconv[,c(1,grep("EOC", colnames(deconv)))]
+genes <- eoc$symbol
+eoc <- as.data.frame(t(eoc[,-1]))
+colnames(eoc) <- gsub("-","_", genes)
+
+#Selecting those samples taken in primary setting
+setting <-sapply(row.names(eoc), function(x){strsplit(x, "[.]")[[1]][4]})
+eoc.p  <- eoc[grepl("01", setting),]
+
+#Selecting those samples taken in recurrence setting
+eoc.r  <- eoc[grep("02", setting),]
+
+#Making shorter names from TCGA.04.1348.01A.01R.1565.13..EOC to TCGA.04.1348
+names.short.p <- sapply(row.names(eoc.p), function(x){
+                  paste(strsplit(x, "[.]")[[1]][1:3], collapse = "-")})
+
+row.names(eoc.p) <- names.short.p
+eoc.p
+```
+
+### Merge RNA expression with clinical data and HRD status
+```{r}
+eoc.clin <- merge(eoc.p, clin.dat, by.x="row.names", by.y="bcr_patient_barcode")
+colnames(eoc.clin)[1] <- "Sample"
+eoc.hr.clin <- merge(eoc.clin, HRD.tab, by="Sample")
+dim(eoc.hr.clin)
+```
+# Select relevant transcripts for Top28 antigens
+
+### Load mapped gene names including synonyms for Top28 antigens 
+```{r}
+# Read the Excel file (adjust the file path accordingly)
+file_path <- "/Users/alex/Desktop/Laboratory/NKI_project/Cerullo_immunopeptidomics/DEGs/top28_idmapping.xlsx"
+data <- read_excel(file_path)
+
+# Extract the 'Gene Names' column
+gene_names <- data$`Gene Names`
+
+# Split the gene names by space
+split_genes <- strsplit(gene_names, " ")
+
+# Unlist the result to create a single vector of gene names
+gene_list <- unlist(split_genes)
+
+# View the resulting list of gene names
+# print(gene_list)
+cat(gene_list, sep = " ")
+```
+
+### Map gene names to available ones in TCGA
+```{r}
+overlapped_top28_genes = intersect(colnames(eoc.hr.clin),gene_list)
+print(overlapped_top28_genes)
+
+# Subset to only chosen genes
+MHCII.antigens.df = eoc.hr.clin[c(c("HLA_DPB1"),overlapped_top28_genes)]
+head(MHCII.antigens.df)
+```
+### Calculate correlation between HLA-DPB1 (MHC-II) expression and Top28 mapped genes
+```{r}
+# Initialize an empty data frame to store the results
+results_df <- data.frame(antigen_gene = character(), rho = numeric(), p_value = numeric())
+
+# Loop over all columns except HLA_DPB1
+for (colname in names(MHCII.antigens.df)) {
+  if (colname != "HLA_DPB1") {
+    # Perform correlation test
+    test_result <- cor.test(MHCII.antigens.df$HLA_DPB1, MHCII.antigens.df[[colname]], method = "pearson")
+    
+    # Append results to the data frame
+    results_df <- rbind(results_df, data.frame(antigen_gene = colname, rho = test_result$estimate, p_value = test_result$p.value))
+  }
+}
+
+# Print the results
+print(results_df)
+```
+### Plot mapped genes of antigens
+```{r}
+library(sjPlot)
+
+# pdf("spearman_correlation_plot.pdf", width = 200, height = 300)
+# Sort the results_df by rho in ascending order
+results_df <- results_df[order(results_df$rho), ]
+
+# Add a column for color based on the conditions
+results_df$color <- ifelse(results_df$p_value > 0.05, "#D9DEE4", 
+                           ifelse(results_df$rho > 0, "#D33F49", "#6599CD"))
+
+# Create the bar plot
+p <- ggplot(results_df, aes(x = reorder(antigen_gene, rho), y = rho, fill = color)) +
+  geom_bar(stat = "identity", color = "white") +
+  scale_fill_identity() + # Use the custom color
+  geom_hline(yintercept = 0, linetype = "dashed") + # Add a line at y = 0
+  coord_flip() + # Flip the plot to make horizontal bars
+  theme_minimal() + # Use a minimal theme for cleaner output
+  labs(x = "Antigen gene", y = "Pearson Correlation", 
+       title = "Pearson Correlation with HLA_DPB1") +
+  theme(axis.text.y = element_text(size = 10)) # Adjust text size for better readability
+print(p)
+save_plot("TCGA_CancerFraction_pearson_correlation_plot.svg", fig = p, width=10, height=15)
+# dev.off()
+```
+### Load single cell Pearson correlation for each sample
+```{r}
+Single.cell.cor.df = read.delim("/Users/alex/Desktop/Laboratory/NKI_project/Cerullo_immunopeptidomics/correlation_15_genes_expression_vs_mhc2_scores_pseudobulk_epithelial.tsv",sep="\t")
+head(Single.cell.cor.df)
+```
+
+### Create dataframe with sample level correlations
+```{r}
+sample_cor_df <- Single.cell.cor.df %>%
+  group_by(gene) %>%
+  summarise(
+    avg_cor_coef = mean(cor_coef, na.rm = TRUE),
+    avg_cor_pval = mean(cor_pval, na.rm = TRUE)
+  )
+
+colnames(sample_cor_df) <- c("gene", "cor_coef", "cor_pval")
+print(sample_cor_df)
+```
+
+```{r}
+# Sort by correlation coefficient in ascending order
+sample_cor_df <- sample_cor_df[order(sample_cor_df$cor_coef), ]
+
+# Add a column for color based on the conditions
+sample_cor_df$color <- ifelse(sample_cor_df$cor_pval > 0.05, "#D9DEE4", 
+                           ifelse(sample_cor_df$cor_coef > 0, "#D33F49", "#6599CD"))
+
+# Create the bar plot
+p <- ggplot(sample_cor_df, aes(x = reorder(gene, cor_coef), y = cor_coef, fill = color)) +
+  geom_bar(stat = "identity", color = "white") +
+  scale_fill_identity() + # Use the custom color
+  geom_hline(yintercept = 0, linetype = "dashed") + # Add a line at y = 0
+  coord_flip() + # Flip the plot to make horizontal bars
+  theme_minimal() + # Use a minimal theme for cleaner output
+  labs(x = "Antigen gene", y = "Pearson Correlation", 
+       title = "Pearson Correlation with HLA_DPB1") +
+  theme(axis.text.y = element_text(size = 10)) # Adjust text size for better readability
+print(p)
+save_plot("SingleCell_pearson_correlation_plot.svg", fig = p, width=10, height=15)
+```
+### Load single cell Pearson correlation for each cell type within sample of HLA-DPB1 and Interferon genes
+```{r}
+Single.cell.int.cor.df = read.delim("/Users/alex/Desktop/Laboratory/NKI_project/Cerullo_immunopeptidomics/correlation_interferon_genes_expression_vs_mhc2_scores_pseudobulk.tsv",sep="\t")
+head(Single.cell.int.cor.df)
+
+filtered.Single.cell.int.cor.df <- Single.cell.int.cor.df %>% drop_na()
+```
+### Create dataframe with cell type level correlations
+```{r}
+
+for (gene in unique(filtered.Single.cell.int.cor.df$gene)) {
+  
+  print(gene)
+  
+  # Subset data to one gene
+  gene_df = filtered.Single.cell.int.cor.df[filtered.Single.cell.int.cor.df$gene == gene, ]
+  
+  # 
+ celltype_cor_df <- gene_df %>%
+  group_by(cellType) %>%
+  summarise(
+    avg_cor_coef = mean(cor_coef, na.rm = TRUE),
+    avg_cor_pval = mean(cor_pval, na.rm = TRUE)
+  )
+
+  colnames(celltype_cor_df) <- c("celltype", "cor_coef", "cor_pval")
+  print(celltype_cor_df)
+  
+  # Sort by correlation coefficient in ascending order
+  celltype_cor_df <- celltype_cor_df[order(celltype_cor_df$cor_coef), ]
+  
+  # Add a column for color based on the conditions
+  celltype_cor_df$color <- ifelse(celltype_cor_df$cor_pval > 0.05, "#D9DEE4", 
+                             ifelse(celltype_cor_df$cor_coef > 0, "#D33F49", "#6599CD"))
+  
+  # Create the bar plot
+  p <- ggplot(celltype_cor_df, aes(x = reorder(celltype, cor_coef), y = cor_coef, fill = color)) +
+    geom_bar(stat = "identity", color = "white") +
+    scale_fill_identity() + # Use the custom color
+    geom_hline(yintercept = 0, linetype = "dashed") + # Add a line at y = 0
+    coord_flip() + # Flip the plot to make horizontal bars
+    theme_minimal() + # Use a minimal theme for cleaner output
+    labs(x = "Cell Type", y = "Pearson Correlation", 
+         title = paste("Cell type specific Pearson Correlation of HLA_DPB1 and", gene)) +
+    theme(axis.text.y = element_text(size = 10)) # Adjust text size for better readability
+  print(p)
+  save_plot(paste0(gene, "_celltype_pearson_correlation_plot.svg"), fig = p, width=10, height=15)
+  
+}
+
+```
+
+```{r}
+IFN1gene_df = filtered.Single.cell.int.cor.df[filtered.Single.cell.int.cor.df$gene == 'IFNA1', ]
+head(IFN1gene_df)
+```
+

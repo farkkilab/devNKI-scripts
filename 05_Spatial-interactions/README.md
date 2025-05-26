@@ -9,7 +9,7 @@ Scripts used to create Recurrent Cellular neighboorhoods (RNC), explore the resu
 
 - **RCN_survival_analysis.Rmd** - Script to perform the RCN correlations, survival analysis and differences between molecular profiles.
   
-- **RCN_cellproportions_exploration.ipynb** - Script to calculate fold changes of RCN abundances between IDS and PDS. And to calculate fold changes in immune cell composition between RCN10 and RCN09.
+- **RCN_exploration_Figure5ki.ipynb** - Script to calculate fold changes of RCN abundances between IDS and PDS. And to calculate fold changes in immune cell composition between RCN10 and RCN09.
 
 - **Spatial_counts.ipynb** - Python script using modified scimap function to count the number of neighbor cells from each population 
 
