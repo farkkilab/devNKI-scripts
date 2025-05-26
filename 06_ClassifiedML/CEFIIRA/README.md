@@ -3,7 +3,7 @@
 
 Files:
 
-- Code is available in 'mol_profiles_bin_class_pipeline.py' for molecular profiles' prediction and in 'clinical_outcome_bin_class_pipeline.py' for clinical outcomes' prediction
+- Code is available in `mol_profiles_bin_class_pipeline.py` for molecular profiles' prediction and in `clinical_outcome_bin_class_pipeline.py` for clinical outcomes' prediction
 - Conda environment is in env.yml
 
 To run the code:
