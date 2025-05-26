@@ -7,7 +7,7 @@ This folder provides code for the analysis of an immunopeptidomic dataset. The p
 ### Maintainer
 **Aleksandra Shabanova**
 
-## Repository Structure
+## Folder Structure
 
 - **`01_Peptide_presence_analysis.ipynb`**  
   - Identifies peptides mapped to significantly correlated antigen genes across TCGA, scRNA-seq, and GeoMx cohorts tumor fraction.
