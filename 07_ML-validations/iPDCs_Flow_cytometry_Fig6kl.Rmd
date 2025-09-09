@@ -1,0 +1,348 @@
+---
+title: "iPDCs Flow cytometry analysis"
+author: "Aleksandra"
+output:
+  html_document:
+    df_print: paged
+---
+
+# iPDCs Flow cytometry data analysis
+Corresponds to Fig.6 k&l
+
+The purpose of this analysis is to reveal the association between MHCII high cancer samples and immunotherapy response of CD8 T cells.
+
+We defined MHCII–high tumors based on the bimodal distribution of HLA-DR expression, where the second peak lies above the median HLA-DR value observed in myeloid/immune cells. This second peak is interpreted as representing MHCII–positive cancer cells.
+
+### Load libraries
+```{r}
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+library(plyr)
+library(tidyr)
+library(purrr)
+library(forcats)
+library(stringr)
+library(readxl)
+```
+
+### Define input folders and baseline samples
+```{r}
+files_dir <- '/Volumes/h345/afarkkilab/Projects/NKI/iPDCs/resubmission_Fernando_and_Aleksandra_30062025/Input/Flow_cytometry_results/'
+gated_dir <- '/Volumes/h345/afarkkilab/Projects/13_Sciset/iPDC_functional_validation/CYTO_CD8_GrzB_gated/'
+output_dir <- '/Volumes/h345/afarkkilab/Projects/NKI/iPDCs/resubmission_Fernando_and_Aleksandra_30062025/Output/Figures/'
+
+#Suffix for d0 cell files
+d0_cancer_prefix="d0_all_combined_cancer_cd11cneg_"
+d0_myeloid_prefix="d0_all_combined_myeloids_control_"
+d0_immune_prefix="d0_all_combined_immune_"
+
+### Set patient encoding
+encoding <- read.csv("/Volumes/h345/afarkkilab/Projects/NKI/iPDCs/sample_encoding.csv")
+patient_map <- setNames(encoding$patient_mapping,encoding$patient)
+encoding_patient_map <- setNames(encoding$patient,encoding$patient_mapping)
+
+### Set sample encoding
+sample_map <- setNames(encoding$sample_mapping,encoding$sample)
+encoding_sample_map <- setNames(encoding$sample,encoding$sample_mapping)
+```
+
+### Collect all available sample names 
+```{r}
+all_sample_names <- list.dirs(files_dir, full.names = FALSE)
+all_sample_names <- all_sample_names[grepl('S', all_sample_names)] #rm empty dir
+
+# Encode samples
+encoded_sample_names <- sample_map[all_sample_names]
+
+#Exclude the sample C024_iOme as d0 is not available
+encoded_sample_names <- encoded_sample_names[which(encoded_sample_names != "C024_iOme")]
+```
+
+### Read gates for MHC-II high cancer samples selected based on the distribution of HLA-DR 
+```{r}
+gates <- read_xlsx("/Volumes/h345/afarkkilab/Projects/NKI/iPDCs/resubmission_Fernando_and_Aleksandra_30062025/Output/Gatings/All_combined_gates.xlsx")
+gates$HLA.Dr <- as.numeric(gates$HLA.Dr)
+```
+
+### Create HLA-DR Distribution plots for Cancer, Immune, Myeloid populations
+```{r}
+for (encoded_sample in encoded_sample_names) {
+  
+  sample <- encoding_sample_map[encoded_sample]
+
+  # Build file paths for each cell type
+  cancer_file <- paste0(files_dir,sample,"/",d0_cancer_prefix,sample,".csv")
+  myeloid_control_file <- paste0(files_dir,sample,"/",d0_myeloid_prefix,sample,".csv")
+  immune_file <- paste0(files_dir,sample,"/",d0_immune_prefix,sample,".csv")
+  
+  # Load CSV data
+  cancer_df <- read.csv(cancer_file)
+  myeloid_df <- read.csv(myeloid_control_file)
+  immune_df <- read.csv(immune_file)
+  
+  # Add a 'Type' column to identify the group in the combined dataset
+  cancer_df <- cancer_df %>% mutate(Cell_Type = "Cancer")
+  myeloid_df <- myeloid_df %>% mutate(Cell_Type = "Myeloid")
+  immune_df <- immune_df %>% mutate(Cell_Type = "Immune")
+  
+  # Merge all data into one dataframe for plotting
+  combined_df <- bind_rows(cancer_df, myeloid_df, immune_df)
+  
+  # Retrieve the threshold value for the current sample (if available)
+  threshold_val <- gates %>%
+    filter(Sample == sample) %>%
+    pull(HLA.Dr)
+  
+  print(paste("Processing: ", encoded_sample, " | Threshold: ", threshold_val))
+  
+  # Create the violin plot
+  plot = ggplot(combined_df, aes(x = Cell_Type, y = HLA.Dr, fill = Cell_Type)) +
+    geom_violin(trim = FALSE, draw_quantiles = TRUE) +
+    labs(title = encoded_sample,
+         x = "",
+         y = "HLA_DR Expression") +
+    
+    scale_fill_manual(values = c('#FED18C', '#A7AEF2', '#C5DEF7')) + 
+    coord_cartesian(ylim = c(0, 1000)) +
+    geom_boxplot(width=0.1) +
+    
+    theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold", size = 17, hjust = 0.5),
+      axis.title = element_text(size = 15),
+      axis.text.x = element_text(size = 15, angle = 45, hjust = 1),
+      axis.text.y = element_text(size = 10),
+      legend.title = element_text(size = 15),
+      legend.text = element_text(size = 15),
+      legend.position = "right",
+      panel.grid.major = element_line(color = "grey85"),
+      panel.grid.minor = element_blank()
+    )
+  
+  # If threshold is not NA, add horizontal line
+  if (length(threshold_val) == 1 && !is.na(threshold_val)) {
+    plot <- plot + geom_hline(yintercept = threshold_val, linetype = "dashed", color = "#D33F49") +
+      annotate("text", x = 1.5, y = threshold_val, label = paste("Threshold:", threshold_val),
+               vjust = -0.5, color = "#D33F49", size = 5)
+  }
+  
+  print(plot)
+  
+  # Save plot
+  # filename = file.path(paste0("/Volumes/h345/afarkkilab/Projects/NKI/iPDCs/resubmission_Fernando_and_Aleksandra_30062025/Output/Gatings/", sample, "_", "all_combined_hla_dr_violin_plot.svg"))
+  # ggsave(filename, plot, width = 6, height = 5)
+
+}
+```
+
+
+### Set MHCII status for samples based on MHCII high cancer sample definition
+```{r}
+MHC_II_high_samples = c('C041', 'C181', 'C696', 'C732')
+```
+
+### Read CD8 T cell phenotype profiling after drug treatment
+```{r}
+drug.responses <- read.table(
+            "/Volumes/h345/afarkkilab/Projects/NKI/iPDCs/all_patients_stats_dt.csv",
+           sep=",",header = TRUE)
+
+# Encode patients
+drug.responses$encoded_patient <- patient_map[drug.responses$patient]
+
+# Remove C024 sample & add MHC_II.status
+drug.responses <- drug.responses %>%
+  filter(encoded_patient != "C024") %>%  # remove patient C024
+  mutate(
+    MHC_II.status = if_else(encoded_patient %in% MHC_II_high_samples, "High \nMHCII", "Low \nMHCII")
+  )
+```
+
+
+### Compare mean of CD8 T cell response across MHC-II high and low cancer samples
+```{r}
+# drug.responses_for_MHCII_high <- drug.responses %>% filter(MHC_II.status == 'high')
+# 
+# present_treatments <- unique(drug.responses_for_MHCII_high$treatment)
+# print(present_treatments)
+# 
+# treatment_order <- rev(c("P5","T5", "P10", "T10", "P5T5", "P5T10", "P10T10"))
+
+treatments <- rev(c("P10", "T10", "P10T10")) # Treatments to include
+markers <- c("GrzB", "IFNg", "Ki67") # Marker types to loop over
+
+# Output directory for saving plots
+output_dir <- "/Volumes/h345/afarkkilab/Projects/NKI/iPDCs/resubmission_Fernando_and_Aleksandra_30062025/Output/Figures/"
+
+for (marker_type in markers) {
+  
+  # Filter dataset for current marker and selected treatments
+  drug.marker <- drug.responses %>%
+    filter(marker == marker_type,
+           treatment %in% treatments) %>%
+    mutate(treatment = factor(treatment, levels = treatments))
+  
+  print(paste("Processing marker: ", marker_type))
+  
+  # Summarise median log2FC by treatment and MHC II status
+  summary_df <- aggregate(log2fc_mean ~ treatment + MHC_II.status, data = drug.marker, FUN = mean, na.rm = TRUE)
+  summary_df %>% arrange(treatment)
+  
+  # Perform Wilcoxon rank-sum test (unpaired) comparing MHC II high vs. low for each treatment
+  pval_df <- drug.marker %>%
+    group_by(treatment) %>%
+    reframe(
+      p.value = tryCatch(
+        wilcox.test(log2fc_mean ~ MHC_II.status)$p.value,
+        error = function(e) NA
+      )
+    ) %>%
+    mutate(marker = marker_type,
+           signif_label = ifelse(!is.na(p.value) & p.value < 0.05, "*", ""))  # Add "*" label
+  
+  # Create heatmap plot
+  heatmap_plot <- ggplot(summary_df, aes(x = MHC_II.status, y = treatment, fill = log2fc_mean)) +
+    geom_tile() +
+    scale_fill_gradient2(high = "#D33F49", mid = '#D9DEE4', low = "#365c63", 
+                         name = paste("Mean \nLog2FC"),
+                         limits = c(-0.06, 0.12)) +
+    labs(
+        title = marker_type,
+        x = "",
+        y = ""
+      ) +
+    coord_fixed() + # Keep square tiles
+    theme_minimal() +
+    theme(
+          plot.title = element_text(face = "bold", size = 17, hjust = 0.5),
+          axis.title = element_text(size = 15),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+          axis.text.y = element_text(size = 15),
+          legend.title = element_text(size = 15),
+          legend.position = "right",
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank()
+        )
+  
+  # Add significance "*" in the middle between MHC-II high vs low
+  # Position at x = 1.5 (between statuses), y = treatment level
+  heatmap_plot <- heatmap_plot +
+    geom_text(data = pval_df,
+              aes(x = 2.5, y = treatment, label = signif_label),
+              inherit.aes = FALSE,
+              size = 8, vjust = 0.5)
+  
+  print(heatmap_plot)
+  
+  # Save plot
+  # filename = file.path(paste0(output_dir, "P10_T10_P10T10_treatments_", "combined_hla_dr_CD8Tcell_", marker_type, "_mean_response.svg"))
+  # ggsave(filename, heatmap_plot, width = 6, height = 2.5)
+  
+  # Reshape summary dataframe to wide format
+  summary_df_wide <- summary_df %>%
+    pivot_wider(names_from = MHC_II.status,
+                values_from = log2fc_mean,
+                names_prefix = "MHCII_")
+  
+  # Join with calculated p-values
+  final_df <- summary_df_wide %>%
+    left_join(pval_df %>% select(treatment, p.value),
+              by = "treatment")
+  
+  print(final_df)
+  
+  # filename = file.path(paste0(output_dir, "P10_T10_P10T10_treatments_", "combined_hla_dr_CD8Tcell_", marker_type, "_mean_response.csv"))
+  # write.csv(final_df, filename, row.names = FALSE)
+}
+```
+
+### Encode samples
+```{r}
+drug.responses <- drug.responses %>%
+  mutate(sample_short = str_c(
+    word(sample, -2, sep = "_"),  # second-to-last part
+    word(sample, -1, sep = "_"),  # last part
+    sep = "_"
+  ))
+
+drug.responses$sample_code <- sample_map[drug.responses$sample_short]
+```
+
+```{r}
+treatments <- c("P10")
+encoded_sample_order <- c("C696_iOme","C041_iOme","C181_iOme","C732_iOme","C944_pOme","C973_pAdnL","C659_pOme","C817_pOme","C661_pAdnL","C215_iAdn")
+
+# Create all combinations
+combos <- crossing(treatment = treatments, marker = markers)
+
+# Loop through combinations
+walk2(combos$treatment, combos$marker, function(treatment_type, marker_type) {
+  
+  drug.marker <- drug.responses %>%
+    filter(marker == marker_type, treatment == treatment_type) %>%
+    mutate(sample_code = factor(sample_code, levels = encoded_sample_order))
+    # mutate(patient_sample = fct_reorder(patient_sample, log2fc_mean)) 
+  
+  print(drug.marker[c('log2fc_mean','pval','MHC_II.status','sample_code')])
+  
+  plot <- ggplot(drug.marker, aes(x = marker, y = sample_code)) +
+    geom_point(size = 5, aes(color = log2fc_mean)) + # size = -log10(pval), 
+    geom_hline(yintercept = 4.5, linetype = "dashed", color = "#508791") +
+    # Overlay black circles for significant points
+    geom_point(
+      data = subset(drug.marker, pval < 0.05),
+      shape = 21,                   
+      stroke = 1,              
+      color = "black",         
+      size = 5 # aes(size = -log10(pval))
+    ) +
+    scale_color_gradient2(
+      low = "#6599CD",
+      mid = "#D9DEE4",
+      high = "#D33F49",
+      midpoint = 0,
+      name = paste("log2FC"),
+      limits = c(-0.1,0.2)
+    ) +
+    scale_size_continuous(
+      name = expression(-log[10](p~value)),
+      limits = c(0, 60),
+      breaks = c(0,20,40,60),
+      range = c(3, 10)  # Bigger points
+    ) +
+    labs(
+      title = "",
+      x = "",
+      y = ""
+    ) +
+    scale_x_discrete(position = "top") +
+    theme_minimal(base_size = 16) +  # Bigger base font
+    theme(
+      # plot.title = element_text(face = "bold", size = 18, hjust = 0.5),
+      # axis.title = element_text(size = 15),
+      axis.text.x = element_text(face = "bold", size = 18, angle = 45, hjust = 0.5),
+      # legend.title = element_text(face = "bold"),
+      legend.position = "right",
+      panel.grid.major = element_line(color = "grey85"),
+      panel.grid.minor = element_blank()
+    ) +
+    coord_fixed()
+  
+  print(plot)
+  
+  # filename = file.path(paste0("/Volumes/h345/afarkkilab/Projects/NKI/iPDCs/resubmission_Fernando_and_Aleksandra_30062025/Output/Figures/", treatment_type, "_", "combined_hla_dr_CD8Tcell_", marker_type, "_mean_response.svg"))
+  # 
+  # # Save plot
+  # ggsave(filename, plot, width = 6, height = 5)
+})
+```
+
+
+
+
+
+
+
+
+
