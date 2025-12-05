@@ -1,0 +1,577 @@
+---
+title: "PRISM Deconvolution Analysis Pipeline for expression of antigen genes"
+output: html_notebook
+---
+
+### Load packages
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+r <- getOption("repos")
+r["CRAN"] = "https://repo.miserver.it.umich.edu/cran/"
+options(repos = r)
+
+install.packages('tidyverse')
+install.packages('reshape2')
+
+library(tidyverse)
+library(data.table)
+library(ggplot2)
+library(ggrepel)
+library(reshape2)
+library(scales)
+```
+
+### Configure directories and sample groups for analysis
+```{r}
+data_dir <- "PATH_TO_INPUT"
+output_dir <- "PATH_TO_OUTPUT"
+dir.create(output_dir, showWarnings = FALSE)
+
+# Sample group definitions
+high_samples <- c("patient1", "patient8", "patient11", "patient12")
+low_samples <- c("patient2", "patient6", "patient7", "patient9")
+```
+
+### Load data
+```{r}
+load_prism_data <- function(data_dir) {
+  cat("Loading PRISM output files...\n")
+  
+  decomp_bulk <- fread(file.path(data_dir, "decom_bulk_expr.tsv")) %>%
+    as.data.frame() %>%
+    column_to_rownames(var = colnames(.)[1])
+  
+  decomp_gains <- fread(file.path(data_dir, "bulk_gains.tsv")) %>%
+    as.data.frame() %>%
+    column_to_rownames(var = colnames(.)[1])
+  
+  decomp_weights <- fread(file.path(data_dir, "bulk_weights.tsv")) %>%
+    as.data.frame() %>%
+    column_to_rownames(var = colnames(.)[1])
+  
+  high_genes <- fread(file.path("PATH_TO_GENES.txt"), header = FALSE) %>%
+    pull(V1)
+  
+  cat(sprintf("Loaded %d genes × %d samples\n", 
+              nrow(decomp_bulk), ncol(decomp_bulk)))
+  
+  return(list(
+    bulk = decomp_bulk,
+    gains = decomp_gains,
+    weights = decomp_weights,
+    genes = high_genes
+  ))
+}
+```
+
+### Data processing functions
+```{r}
+combine_compartments <- function(weights_df) {
+  # Combine Immune and Stromal compartments.
+  if ("Immune" %in% colnames(weights_df) && "Stromal" %in% colnames(weights_df)) {
+    weights_df$Immune_Stromal <- weights_df$Immune + weights_df$Stromal
+    cat("Combined Immune and Stromal compartments\n")
+  }
+  return(weights_df)
+}
+
+combine_immune_stromal_bulk <- function(bulk_expr) {
+  # Combine Immune and Stromal compartments in bulk expression data.
+  cat("Combining Immune and Stromal compartments in bulk expression...\n")
+  
+  # Find all sample names from column patterns
+  immune_cols <- filter_columns_by_pattern(bulk_expr, "\\.Immune$")
+  stromal_cols <- filter_columns_by_pattern(bulk_expr, "\\.Stromal$")
+  
+  # Extract sample names (remove .Immune/.Stromal suffix)
+  immune_samples <- sub("\\.Immune$", "", immune_cols)
+  stromal_samples <- sub("\\.Stromal$", "", stromal_cols)
+  
+  # Find matching pairs
+  shared_samples <- intersect(immune_samples, stromal_samples)
+  
+  if (length(shared_samples) == 0) {
+    warning("No matching Immune/Stromal pairs found")
+    return(bulk_expr)
+  }
+  
+  cat(sprintf("Combining %d Immune/Stromal pairs\n", length(shared_samples)))
+  
+  # Combine each pair and add as new column
+  for (sample in shared_samples) {
+    immune_col <- paste0(sample, ".Immune")
+    stromal_col <- paste0(sample, ".Stromal")
+    combined_col <- paste0(sample, ".Immune_Stromal")
+    
+    if (immune_col %in% colnames(bulk_expr) && stromal_col %in% colnames(bulk_expr)) {
+      bulk_expr[[combined_col]] <- bulk_expr[[immune_col]] + bulk_expr[[stromal_col]]
+    }
+  }
+  
+  return(bulk_expr)
+}
+
+filter_columns_by_pattern <- function(data, pattern) {
+  # Filter column names by pattern.
+  cols <- colnames(data)[grepl(pattern, colnames(data))]
+  return(cols)
+}
+
+scale_prism_data <- function(bulk_expr, gains, weights) {
+  # Use PRISM normalization: column-wise (sample-wise) scaling
+  cat("Applying PRISM column-wise scaling method...\n")
+  
+  # Prepare data
+  bulk.dat <- as.matrix(bulk_expr)
+  w.dat <- as.matrix(weights)
+  g.vec <- as.numeric(gains)
+  
+  # Extract sample names from bulk_expr column names
+  # Format: Sample1.Tumor, Sample1.Immune_Stromal, Sample2.Tumor, Sample2.Immune_Stromal
+  bulk_col_names <- colnames(bulk.dat)
+  
+  # Extract unique sample identifiers (everything before the first dot)
+  bulk_samples <- sub("\\..*", "", bulk_col_names)
+  unique_samples <- unique(bulk_samples)
+  
+  cat("Sample structure analysis:\n")
+  cat("  Bulk samples found:", length(unique_samples), "-", paste(head(unique_samples, 3), collapse=", "), "...\n")
+  cat("  Weights samples:", nrow(w.dat), "\n")
+  cat("  Gains samples:", length(g.vec), "\n")
+  
+  # Validation: Check sample name matching
+  weights_samples <- rownames(w.dat)
+  if (is.null(weights_samples)) {
+    stop("weights must have row names matching sample identifiers (e.g., 'Sample1', 'Sample2')")
+  }
+  
+  if (!all(unique_samples %in% weights_samples)) {
+    missing <- setdiff(unique_samples, weights_samples)
+    stop(sprintf("Samples in bulk_expr not found in weights: %s", paste(missing, collapse=", ")))
+  }
+  
+  # Validation: Check gains length
+  if (length(g.vec) != nrow(w.dat)) {
+    stop(sprintf("Length mismatch: gains has %d values, weights has %d samples", 
+                 length(g.vec), nrow(w.dat)))
+  }
+  
+  # Match gains and weights to bulk_expr columns
+  # For each bulk column (e.g., "Sample1.Tumor"), get the corresponding sample's gains and weights
+  scaling_factors <- numeric(ncol(bulk.dat))
+  
+  for (i in seq_along(scaling_factors)) {
+    sample_id <- bulk_samples[i]
+    sample_idx <- which(rownames(w.dat) == sample_id)
+    cell_type <- sub(".*\\.", "", bulk_col_names[i])
+    
+    if (length(sample_idx) == 0) {
+      stop(sprintf("Sample '%s' from bulk_expr not found in weights", sample_id))
+    }
+    
+    # Scale factor = gain * weight for this sample
+    scaling_factors[i] <- g.vec[sample_idx] * w.dat[sample_idx, cell_type]
+  }
+  
+  cat("\nScaling factors per sample and cell type (first 10 columns):\n")
+  cat("Formula: Gains[Sample] × Weights[Sample, CellType] = Scaling_Factor\n\n")
+  
+  scaling_df <- data.frame(
+    bulk_column = bulk_col_names,
+    sample = bulk_samples,
+    gain = NA,
+    weight = NA,
+    scaling_factor = scaling_factors,
+    formula = NA
+  )
+  
+  for (i in seq_along(scaling_factors)) {
+    sample_id <- bulk_samples[i]
+    sample_idx <- which(rownames(w.dat) == sample_id)
+    cell_type <- sub(".*\\.", "", bulk_col_names[i])
+    
+    scaling_df$gain[i] <- g.vec[sample_idx]
+    scaling_df$weight[i] <- w.dat[sample_idx, cell_type]
+    scaling_df$formula[i] <- sprintf("Gains[%s] × Weights[%s, '%s'] = %.6f", 
+                                      sample_id, sample_id, cell_type, scaling_factors[i])
+  }
+  
+  print(scaling_df)
+  
+  # Validation: Check for problematic values
+  if (any(scaling_factors == 0, na.rm = TRUE)) {
+    warning("Warning: Zero values detected in scaling factors")
+  }
+  if (any(is.na(scaling_factors))) {
+    warning("Warning: NA values detected in scaling factors")
+  }
+  
+  # Core calculation - column-wise division
+  deconv <- t( t(bulk.dat) / scaling_factors )
+  
+  # Validation: Check output
+  if (ncol(deconv) != ncol(bulk.dat) || nrow(deconv) != nrow(bulk.dat)) {
+    stop("Error: Output dimensions don't match input dimensions!")
+  }
+  
+  cat("\nScaling completed successfully!\n")
+  cat("  Output dimensions:", nrow(deconv), "genes x", ncol(deconv), "samples\n")
+  
+  return(as.data.frame(deconv))
+}
+
+subset_high_genes <- function(data, gene_list) {
+  # Subset data to high-enriched genes.
+  genes_present <- intersect(gene_list, rownames(data))
+  subset <- data[genes_present, , drop = FALSE]
+  
+  cat(sprintf("Subset to %d / %d high-enriched genes\n", 
+              nrow(subset), length(gene_list)))
+  return(subset)
+}
+
+compute_z_scores_row <- function(x) {
+  # Compute z-score row-wise.
+  return( (x - mean(x)) / sd(x))
+}
+
+z_score_data <- function(data) {
+  # Apply row-wise (per gene) z-scoring
+  cat("Computing z-scores per gene across samples...\n")
+  
+  z_scores <- t(apply(data, 1, compute_z_scores_row))
+  colnames(z_scores) <- colnames(data)
+  z_scores <- as.data.frame(z_scores)
+  
+  return(z_scores)
+}
+
+separate_by_compartment <- function(data, tumor_pattern = "Tumor", immune_pattern = "Immune_Stromal") {
+  # Separate data by compartment columns.
+  tumor_cols <- filter_columns_by_pattern(data, tumor_pattern)
+  immune_cols <- filter_columns_by_pattern(data, immune_pattern)
+  
+  return(list(
+    tumor = data[, tumor_cols, drop = FALSE],
+    immune = data[, immune_cols, drop = FALSE]
+  ))
+}
+
+extract_sample_names <- function(col_names) {
+  # Extract sample identifiers from column names.
+  samples <- sub("\\..*", "", col_names)
+  return(samples)
+}
+
+create_sample_groups <- function(samples, high_list, low_list) {
+  # Create sample group assignments.
+  groups <- case_when(
+    samples %in% high_list ~ "High",
+    samples %in% low_list ~ "Low",
+    TRUE ~ "Mid"
+  )
+  
+  sample_df <- tibble(Sample = samples, Group = groups)
+  cat("Sample groups:\n")
+  print(table(sample_df$Group))
+  
+  return(sample_df)
+}
+
+melt_to_long_format <- function(data, compartment_name) {
+  # Convert wide format to long format efficiently.
+  data %>%
+    rownames_to_column(var = "Gene") %>%
+    pivot_longer(
+      cols = -Gene,
+      names_to = "Sample_ID",
+      values_to = "Value"
+    ) %>%
+    mutate(Compartment = compartment_name)
+}
+
+prepare_long_data <- function(tumor_z, immune_z, tumor_norm, immune_norm, sample_groups) {
+  # Prepare all data in long format with sample grouping.
+  cat("Converting to long format...\n")
+  
+  # Z-scores long format
+  z_long <- bind_rows(
+    melt_to_long_format(tumor_z, "Tumor"),
+    melt_to_long_format(immune_z, "Immune_Stromal")
+  ) %>%
+    mutate(Sample = sub("\\..*", "", Sample_ID)) %>%
+    left_join(sample_groups, by = "Sample") %>%
+    rename(Z_scores = Value)
+  
+  # Normalised expression long format
+  norm_long <- bind_rows(
+    melt_to_long_format(tumor_norm, "Tumor"),
+    melt_to_long_format(immune_norm, "Immune_Stromal")
+  ) %>%
+    mutate(Sample = sub("\\..*", "", Sample_ID)) %>%
+    left_join(sample_groups, by = "Sample") %>%
+    rename(Normalised_expression = Value)
+  
+  return(list(z_scores = z_long, normalised = norm_long))
+}
+
+aggregate_by_group <- function(long_data, value_col) {
+  #  Aggregate data by Gene, Compartment, and Group using median.
+  long_data %>%
+    group_by(Gene, Compartment, Group) %>%
+    summarise(
+      median_value = median(!!sym(value_col), na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    rename(!!value_col := median_value)
+}
+
+```
+
+### Visualisation functions
+```{r}
+plot_heatmap_z_scores <- function(z_summary, output_dir, high_samples, low_samples) {
+  # Create faceted heatmap of z-scores (High vs Low groups).
+  cat("Creating heatmap...\n")
+  
+  heatmap_data <- z_summary %>%
+    filter(Group %in% c("High", "Low"))
+  
+  p <- ggplot(heatmap_data, aes(x = Group, y = Gene, fill = Z_scores)) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    facet_wrap(~Compartment, ncol = 2) +
+    scale_fill_gradient2(low = "#D9DEE4", high = "#508791", name = "Median\nz-score") +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 7),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid = element_blank()
+    ) +
+    labs(
+      title = "Z-scores of scaled expression\nacross compartments",
+      subtitle = sprintf("MHCII-high (n=%d) \nMHCII-low (n=%d)", 
+                         length(high_samples), length(low_samples)),
+      x = "Group", y = "Gene"
+    )
+  
+  ggsave(file.path(output_dir, "heatmap_z_scores.pdf"), 
+         plot = p, width = 4, height = 6, dpi = 300)
+  invisible(p)
+}
+
+plot_tumor_specificity <- function(norm_summary, output_dir) {
+  #Plot tumor compartment specificity in high samples.
+  cat("Creating specificity plot...\n")
+  
+  specificity_data <- norm_summary %>%
+    filter(Group == "High") %>%
+    pivot_wider(
+      names_from = Compartment,
+      values_from = Normalised_expression,
+      values_fill = 0
+    ) %>%
+    mutate(Specificity = Tumor / (Tumor + Immune_Stromal)) %>%
+    arrange(desc(Specificity))
+  
+  p <- ggplot(specificity_data, aes(x = reorder(Gene, Specificity), y = Specificity)) +
+    geom_segment(aes(xend = Gene, y = 0, yend = Specificity), 
+                 color = "#D9DEE4", linewidth = 0.8) +
+    geom_point(aes(color = Tumor), size = 3, alpha = 0.8) +
+    scale_color_gradient(low = "#FED18C", high = "#D33F49", 
+                         name = "Scaled. expr.\nin Tumor") +
+    coord_flip() +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 9),
+      legend.position = "right"
+    ) +
+    labs(
+      title = "Tumor compartment specificity\nin MHCII-high samples",
+      subtitle = "Specificity = Tumor /\n(Tumor + Immune_Stromal)",
+      x = "Gene", y = "Specificity Score (0-1)"
+    )
+  
+  ggsave(file.path(output_dir, "tumor_specificity.pdf"), 
+         plot = p, width = 4, height = 6, dpi = 300)
+  invisible(p)
+}
+
+plot_fold_change <- function(norm_summary, output_dir) {
+  # Plot fold change: High vs Mean of Low&Mid.
+  cat("Creating fold-change plot...\n")
+  
+  fold_change_data <- norm_summary %>%
+    filter(Compartment == "Tumor") %>%
+    pivot_wider(
+      names_from = Group,
+      values_from = Normalised_expression,
+      values_fill = 0
+    ) %>%
+    mutate(
+      Low_Mid_Mean = (Low + Mid) / 2,
+      FoldChange = High / (Low_Mid_Mean),
+      LogFC = log1p(FoldChange)
+    ) %>%
+    arrange(desc(FoldChange))
+  
+  p <- ggplot(fold_change_data, aes(x = reorder(Gene, FoldChange), y = FoldChange)) +
+    geom_segment(aes(xend = Gene, y = 0, yend = FoldChange),
+                 color = "#D9DEE4", linewidth = 0.8) +
+    geom_point(aes(color = FoldChange, size = High), alpha = 0.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+    scale_color_gradient2(low = "#6599CD", mid = "white", high = "#D33F49",
+                          name = "FC", midpoint = 0) +
+    scale_size_continuous(name = "Tumor Scaled Expr.\n in MHCII-high samples") +
+    coord_flip() +
+    theme_minimal() +
+    theme(axis.text.y = element_text(size = 9)) +
+    labs(
+      title = "Fold Change of scaled tumor exp.\n: High vs Mean of Low & Mid Samples",
+      subtitle = "Tumor compartment only",
+      x = "Gene", y = "Fold Change"
+    )
+  
+  ggsave(file.path(output_dir, "fold_change.pdf"), 
+         plot = p, width = 6, height = 6, dpi = 300)
+  invisible(p)
+}
+
+plot_bubble_specificity_expression <- function(norm_summary, z_summary, output_dir) {
+  # Create bubble plot: expression vs specificity colored by fold change.
+  cat("Creating bubble plot...\n")
+  
+  # Prepare data for bubble plot
+  tumor_data <- norm_summary %>%
+    filter(Group == "High", Compartment == "Tumor") %>%
+    select(Gene, Normalised_expression) %>%
+    rename(Tumor_Expr = Normalised_expression)
+  
+  immune_stromal_data <- norm_summary %>%
+    filter(Group == "High", Compartment == "Immune_Stromal") %>%
+    select(Gene, Normalised_expression) %>%
+    rename(Immune_Stromal_Expr = Normalised_expression)
+  
+  tumor_z_scores <- z_summary %>%
+    filter(Group == "High", Compartment == "Tumor") %>%
+    select(Gene, Z_scores) %>%
+    rename(Tumor_Z = Z_scores)
+  
+  immune_stromal_z_scores <- z_summary %>%
+    filter(Group == "High", Compartment == "Immune_Stromal") %>%
+    select(Gene, Z_scores) %>%
+    rename(Immune_Stromal_Z = Z_scores)
+  
+  fc_data <- norm_summary %>%
+    filter(Compartment == "Tumor") %>%
+    pivot_wider(
+      names_from = Group,
+      values_from = Normalised_expression,
+      values_fill = 0
+    ) %>%
+    mutate(FoldChange = High /  ((Low + Mid) / 2)) %>% #
+    select(Gene, FoldChange)
+  
+  bubble_data <- tumor_data %>%
+    left_join(tumor_z_scores, by = "Gene") %>%
+    left_join(immune_stromal_data, by = "Gene") %>%
+    left_join(immune_stromal_z_scores, by = "Gene") %>%
+    left_join(fc_data, by = "Gene") %>%
+    mutate(
+      Specificity = Tumor_Expr / (Tumor_Expr + Immune_Stromal_Expr),
+      FoldChange = FoldChange
+    ) %>%
+    arrange(desc(Specificity))
+  
+  print(bubble_data)
+  write_csv(bubble_data, file.path(output_dir, "35_antigen_gene_exp.csv"))
+  
+  # Label top genes (if needed)
+  top_genes <- bubble_data %>% filter(FoldChange > 1.1) %>% pull(Gene)
+  print(length(top_genes))
+  
+  p <- ggplot(bubble_data, aes(x = Tumor_Expr, y = Specificity)) +
+    geom_point(aes(color = FoldChange), size = 3, alpha = 0.7) +
+    geom_text_repel(
+      data = bubble_data %>% filter(Gene %in% top_genes),
+      aes(label = Gene),
+      size = 2.5,
+      point.size = NA,
+      seed = 7,
+      max.overlaps = Inf,
+      min.segment.length = unit(0, 'lines')
+    ) +
+    scale_color_gradient2(
+      low = "#C5DEF7", mid = "#D9DEE4", high = "#D33F49",
+      name = "FC in expression\nbetween\nMHCII-high\nvs mean of mid and\nlow samples",
+      midpoint = 1,
+      oob = squish
+    ) +
+    theme_minimal() +
+    theme(legend.position = "right") +
+    labs(
+      title = "Malignancy-associated gene landscape\n(only genes with FC>1.1 are labeled)",
+      subtitle = "Gene expression and specificity in MHCII-high samples",
+      x = "Median scaled tumor expression in high samples",
+      y = "Tumor Specificity (0-1)"
+    )
+  
+  ggsave(file.path(output_dir, "bubble_plot.pdf"), 
+         plot = p, width = 6, height = 6, dpi = 300)
+  invisible(p)
+}
+```
+
+```{r}
+cat("========== PRISM Deconvolution Analysis Pipeline ==========\n")
+  
+# Load data
+prism_data <- load_prism_data(data_dir)
+
+# Combine Immune and Stromal compartments
+bulk <- combine_immune_stromal_bulk(prism_data$bulk) 
+weights <- combine_compartments(prism_data$weights)
+tumor_cols <- filter_columns_by_pattern(bulk, "Tumor")
+immune_stroma_cols <- filter_columns_by_pattern(bulk, "Immune_Stromal")
+
+# Scale
+scaled <- scale_prism_data(bulk[c(tumor_cols,immune_stroma_cols)], prism_data$gains, weights[c(3,4)])
+
+# Subset high genes
+high_gene_data <- subset_high_genes(scaled, prism_data$genes)
+
+# Z-scores
+z_scores <- z_score_data(high_gene_data)
+
+# Separate compartments
+tumor_z <- separate_by_compartment(z_scores)$tumor
+immune_z <- separate_by_compartment(z_scores)$immune
+tumor_norm <- separate_by_compartment(high_gene_data)$tumor
+immune_norm <- separate_by_compartment(high_gene_data)$immune
+
+# Sample grouping
+samples <- extract_sample_names(colnames(tumor_norm))
+sample_groups <- create_sample_groups(samples, high_samples, low_samples)
+
+# Long format
+long_data <- prepare_long_data(tumor_z, immune_z, tumor_norm, immune_norm, 
+                               sample_groups)
+
+# Aggregate
+z_summary <- aggregate_by_group(long_data$z_scores, "Z_scores")
+norm_summary <- aggregate_by_group(long_data$normalised, "Normalised_expression")
+
+# Save summary tables
+write_csv(z_summary, file.path(output_dir, "z_scores_summary.csv"))
+write_csv(norm_summary, file.path(output_dir, "normalised_expression_summary.csv"))
+cat("Saved summary tables\n")
+
+# Visualizations
+plot_heatmap_z_scores(z_summary, output_dir, high_samples, low_samples)
+plot_tumor_specificity(norm_summary, output_dir)
+plot_fold_change(norm_summary, output_dir)
+plot_bubble_specificity_expression(norm_summary, z_summary, output_dir)
+
+cat("\n========== Analysis Complete! ==========\n")
+cat(sprintf("Results saved to: %s\n", output_dir))
+```
+
