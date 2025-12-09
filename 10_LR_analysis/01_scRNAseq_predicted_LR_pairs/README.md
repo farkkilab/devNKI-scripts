@@ -26,7 +26,7 @@ This folder provides code for predicting ligand-receptor (LR) interactions from 
   - `run_3_Plot_generation_Script.R`: Automates `3.3_Plot_generation.Rmd` for selected cell types.
 
 - **`4_Analysis_of_PrioritisationTbls.Rmd`**  
-  Analyzes top ligand-receptor pairs and visualizes differences in median scaled LR product between MHCII-high and MHCII-low samples (e.g., Fig. 5h in the associated publication).
+  Analyzes top ligand-receptor pairs and visualizes differences in median scaled LR product between MHCII-high and MHCII-low samples (e.g., Fig. 5i in the associated publication).
 
 ## Usage
 
