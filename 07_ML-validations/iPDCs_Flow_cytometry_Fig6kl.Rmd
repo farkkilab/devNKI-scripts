@@ -7,7 +7,7 @@ output:
 ---
 
 # iPDCs Flow cytometry data analysis
-Corresponds to Fig.6 k&l
+Corresponds to Fig.7 b&c
 
 The purpose of this analysis is to reveal the association between MHCII high cancer samples and immunotherapy response of CD8 T cells.
 
