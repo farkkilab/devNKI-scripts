@@ -1,6 +1,6 @@
 # `devNKI-scripts:13_IPDCS`
 
-## Project Objective / Context
+## Overview
 
 This folder contains scripts related to **Figure 7 and Supplementary Figure 7** of the associated publication. The primary objective of this analysis is to investigate the **role of MHC class II (MHCII) expression in tumor samples on the efficacy of Immunotherapy (ICB)**, specifically focusing on T cell responses in different experimental setups.
 
