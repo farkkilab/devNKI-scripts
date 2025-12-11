@@ -55,17 +55,17 @@ The validation is carried out through two distinct studies:
 #### 2A. Flow Cytometry Analysis (T-cell Function)
 
   * **Scripts:** Files in `MHCII_blockade/Flow_cytometry_analysis/`
-  * **Analysis Goal:** Quantify the IFN-$\gamma$ and Granzyme B response (as Median Fluorescent Intensity) in various gated immune populations:
+  * **Analysis Goal:** Quantify the IFN-gamma and Granzyme B response (as Median Fluorescent Intensity) in various gated immune populations:
       * CD45+, CD3+, CD3+CD4+, CD3+CD4-, CD3+CD8+, CD3+CD8-
   * **Process:**
-    1.  MFI is calculated for IFN-$\gamma$ and Granzyme B for each cell type and condition per patient.
+    1.  MFI is calculated for IFN-gamma and Granzyme B for each cell type and condition per patient.
     2.  Three $\log_2$ fold-change ($\log_2\text{FC}$) comparisons are calculated per patient/cell type:
           * Pembrolizumab vs. Control
           * Anti-HLA + Pembrolizumab vs. Pembrolizumab
           * Anti-HLA + Pembrolizumab vs. Control
     3.  The $\log_2\text{FC}$ values are **pooled** by calculating the mean across the three patients (e.g., in `Heatmap.R`).
   * **Outputs (Publication Figures):**
-      * **Figure 7d, e:** Heatmaps showing the pooled mean $\log_2\text{FC}$ for IFN-$\gamma$ and Granzyme B.
+      * **Figure 7d, e:** Heatmaps showing the pooled mean $\log_2\text{FC}$ for IFN-gamma and Granzyme B.
       * **Supplementary Figure 7c, d:** Violin plots generated from the patient-specific $\log_2\text{FC}$ statistics (e.g., from `Statistics_CD3+CD4+.R`).
 
 #### 2B. Cytokine Profiling (LEGENDplex)
